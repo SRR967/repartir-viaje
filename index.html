@@ -55,6 +55,12 @@ button.plus{padding:0 13px;font-weight:700;font-size:18px;line-height:1;color:va
 #amountHint:empty{display:none}
 details.det{margin-top:4px}details.det summary{cursor:pointer;color:var(--accent);font-size:13px;width:max-content}
 details.det div{font-size:13px;color:var(--muted)}details.det b{color:var(--ink);font-weight:600}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:20}
+.modal[hidden]{display:none}
+.modal .box{background:var(--card);color:var(--ink);border-radius:14px;padding:18px;width:100%;max-width:440px;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+.modal p{margin:0 0 14px}
+.modal textarea{width:100%;min-height:110px;margin-bottom:12px;font:13px/1.4 ui-monospace,Menlo,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px;resize:vertical}
+button.danger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600}
 .filters{margin-bottom:10px}.filters select{flex:1;min-width:150px}
 .fsum{display:flex;flex-wrap:wrap;gap:6px 16px;background:var(--accent-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
 .fsum b{white-space:nowrap}
@@ -183,11 +189,22 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
       <button id="exportJson">Exportar archivo</button>
       <button id="importJson">Importar archivo</button>
       <button id="reset" class="ghost">Borrar todo</button>
-      <input type="file" id="file" accept="application/json" hidden>
+      <input type="file" id="file" accept=".json,application/json,text/plain" hidden>
     </div>
   </section>
 </main>
 <div class="toast" id="toast"></div>
+<div class="modal" id="modal" hidden>
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="mMsg">
+    <p id="mMsg"></p>
+    <textarea id="mText" hidden></textarea>
+    <div class="row" style="justify-content:flex-end">
+      <button type="button" id="mExtra" style="margin-right:auto" hidden></button>
+      <button type="button" id="mCancel">Cancelar</button>
+      <button type="button" id="mOk" class="primary">Aceptar</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -455,12 +472,14 @@ document.addEventListener('click', e => {
     toast('Ajusta el valor si fue solo una parte');
   } else if (t.dataset.delPay) {
     const x = S.payments.find(p => p.id === t.dataset.delPay);
-    if (confirm(`¿Eliminar el abono de ${nameOf(x.from)} a ${nameOf(x.to)} por ${fmt(x.amount)}?`)) { S.payments = S.payments.filter(p => p !== x); render(); }
+    ask(`¿Eliminar el abono de ${nameOf(x.from)} a ${nameOf(x.to)} por ${fmt(x.amount)}?`, 'Eliminar', true)
+      .then(ok => { if (ok) { S.payments = S.payments.filter(p => p !== x); render(); } });
   } else if (t.dataset.mode) {
     mode = t.dataset.mode; renderForm();
   } else if (t.dataset.delExp) {
     const ex = S.expenses.find(x => x.id === t.dataset.delExp);
-    if (confirm(`¿Eliminar "${ex.desc || 'Gasto'}"?`)) { S.expenses = S.expenses.filter(x => x !== ex); if (editing === ex.id) resetForm(); render(); }
+    ask(`¿Eliminar "${ex.desc || 'Gasto'}" (${fmt(ex.amount)})?`, 'Eliminar', true)
+      .then(ok => { if (ok) { S.expenses = S.expenses.filter(x => x !== ex); if (editing === ex.id) resetForm(); render(); } });
   } else if (t.closest('[data-edit]') && !t.closest('details')) {
     startEdit(t.closest('[data-edit]').dataset.edit);
   } else if (t.dataset.fillRest !== undefined) {
@@ -565,9 +584,36 @@ async function decode(str){
   if (str[0] === 'z') { const st = new Blob([u]).stream().pipeThrough(new DecompressionStream('deflate-raw')); return JSON.parse(await new Response(st).text()); }
   return JSON.parse(new TextDecoder().decode(u));
 }
+/* In-page dialogs (native confirm/prompt are blocked in some browsers and in-app webviews). */
+function dialog({ msg, ok = 'Aceptar', cancel = 'Cancelar', extra = null, danger = false, text = null, readonly = false, placeholder = '' }){
+  return new Promise(res => {
+    const m = $('#modal'), ta = $('#mText'), okB = $('#mOk'), cB = $('#mCancel'), xB = $('#mExtra');
+    $('#mMsg').textContent = msg;
+    ta.hidden = text === null; ta.value = text || ''; ta.readOnly = readonly; ta.placeholder = placeholder;
+    okB.textContent = ok; okB.className = danger ? 'danger' : 'primary';
+    cB.textContent = cancel || ''; cB.hidden = !cancel;
+    xB.textContent = extra || ''; xB.hidden = !extra;
+    m.hidden = false;
+    if (text !== null) { ta.focus(); if (readonly) ta.select(); } else okB.focus();
+    const key = e => { if (e.key === 'Escape') done(false); };
+    const done = v => { m.hidden = true; okB.onclick = cB.onclick = xB.onclick = m.onclick = null; document.removeEventListener('keydown', key); res(v); };
+    okB.onclick = () => done(text !== null && !readonly ? ta.value : true);
+    cB.onclick = () => done(false);
+    xB.onclick = () => done('extra');
+    m.onclick = e => { if (e.target === m) done(false); };
+    document.addEventListener('keydown', key);
+  });
+}
+const ask = (msg, ok = 'Sí', danger = false) => dialog({ msg, ok, danger });
 async function copy(text, msg){
   try { await navigator.clipboard.writeText(text); toast(msg); }
-  catch { prompt('Copia esto:', text); }
+  catch { dialog({ msg: 'No se pudo copiar automáticamente. Selecciona el texto y cópialo:', text, readonly: true, ok: 'Listo', cancel: null }); }
+}
+async function replaceWith(d, what){
+  if (!valid(d)) return toast(what + ' no es válido');
+  const has = S.people.length || S.expenses.length || S.payments.length;
+  if (has && !await ask(`¿Reemplazar lo que tienes guardado aquí con el viaje "${d.name || 'sin nombre'}" (${d.people.length} persona${d.people.length === 1 ? '' : 's'}, ${d.expenses.length} gasto${d.expenses.length === 1 ? '' : 's'})?`, 'Reemplazar', true)) return;
+  S = norm(d); resetForm(); render(); toast('Viaje cargado');
 }
 function valid(d){ return d && Array.isArray(d.people) && Array.isArray(d.expenses); }
 
@@ -589,26 +635,34 @@ $('#exportJson').addEventListener('click', () => {
   a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' }));
   a.download = (S.name || 'viaje').replace(/[^\w\-áéíóúñ ]/gi, '').trim().replace(/\s+/g, '-') + '.json'; a.click();
 });
-$('#importJson').addEventListener('click', () => $('#file').click());
-$('#file').addEventListener('change', async e => {
-  const f = e.target.files[0]; if (!f) return;
-  try { const d = JSON.parse(await f.text()); if (!valid(d)) throw 0; if (confirm('¿Reemplazar los datos actuales con este archivo?')) { S = norm(d); resetForm(); render(); toast('Importado'); } }
-  catch { toast('Archivo no válido'); }
-  e.target.value = '';
+$('#importJson').addEventListener('click', async () => {
+  const r = await dialog({ msg: 'Elige el archivo exportado, o pega aquí el enlace del viaje o el contenido del archivo.', text: '',
+    placeholder: 'https://…#d=…  o  { "name": … }', ok: 'Importar lo pegado', extra: 'Elegir archivo…' });
+  if (r === 'extra') return $('#file').click();
+  if (!r || !r.trim()) return;
+  try {
+    const s = r.trim(), m = s.match(/#d=([\w-]+)/);
+    await replaceWith(m ? await decode(m[1]) : JSON.parse(s), 'Lo pegado');
+  } catch { toast('Lo pegado no es un enlace o archivo válido'); }
 });
-$('#reset').addEventListener('click', () => { if (confirm('¿Borrar todas las personas y gastos?')) { S = norm(blank()); resetForm(); render(); } });
+$('#file').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  let d; try { d = JSON.parse(await f.text()); } catch { return toast('Ese archivo no es un respaldo válido'); }
+  await replaceWith(d, 'El archivo');
+});
+$('#reset').addEventListener('click', async () => {
+  if (!await ask('¿Borrar todas las personas, gastos y abonos? Esto no se puede deshacer (exporta un archivo antes si quieres un respaldo).', 'Borrar todo', true)) return;
+  S = norm(blank()); resetForm(); render(); toast('Todo borrado');
+});
 
 (async function init(){
   const m = location.hash.match(/^#d=(.+)$/);
-  if (m) {
-    try {
-      const d = await decode(m[1]);
-      if (valid(d) && (!S.expenses.length && !S.people.length || confirm(`Abriste el viaje "${d.name}". ¿Reemplazar lo que tienes guardado aquí?`))) { S = norm(d); toast('Viaje cargado'); }
-    } catch { toast('El enlace no es válido'); }
-    history.replaceState(null, '', location.pathname + location.search);
-  }
   $('#date').value = today(); $('#payDate').value = today();
   render();
+  if (m) {
+    history.replaceState(null, '', location.pathname + location.search);
+    try { await replaceWith(await decode(m[1]), 'El enlace'); } catch { toast('El enlace no es válido'); }
+  }
 })();
 </script>
 </body>
