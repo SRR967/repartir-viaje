@@ -49,6 +49,10 @@ button.ghost:hover{color:var(--danger)}
 .linkbtn{border:0;background:none;color:var(--accent);padding:0 4px;font-size:13px;text-decoration:underline}
 .half{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 button.small{padding:5px 10px;font-size:13px}
+.filters{margin-bottom:10px}.filters select{flex:1;min-width:150px}
+.fsum{display:flex;flex-wrap:wrap;gap:6px 16px;background:var(--accent-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
+.fsum b{white-space:nowrap}
+.exp .mine{font-size:13px;color:var(--accent);font-weight:600}
 .custom{display:grid;grid-template-columns:1fr 140px;gap:6px 10px;align-items:center}
 .field{display:grid;gap:4px;margin-bottom:10px}
 .field>span{font-size:13px;color:var(--muted)}
@@ -121,6 +125,15 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
 
   <section class="card">
     <h2>Gastos <span id="totalSpent" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="row filters">
+      <select id="fPerson" aria-label="Filtrar por persona"><option value="">Todas las personas</option></select>
+      <select id="fKind" aria-label="Tipo de filtro">
+        <option value="any">Pagó o participó</option>
+        <option value="paid">Solo lo que pagó</option>
+        <option value="part">Solo en lo que participó</option>
+      </select>
+    </div>
+    <div id="filterSummary"></div>
     <div id="expenses"></div>
   </section>
 
@@ -177,6 +190,8 @@ const blank = () => ({ name: 'Mi viaje', currency: 'COP', people: [], expenses: 
 const norm = d => { if (!Array.isArray(d.payments)) d.payments = []; return d; };
 let S = norm(load() || blank());
 let mode = 'equal', editing = null, draftAmong = null, draftShares = {};
+const filt = { person: '', kind: 'any' };
+const filterPerson = () => S.people.some(p => p.id === filt.person) ? filt.person : '';
 
 function load(){ try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
@@ -309,13 +324,30 @@ function renderExpenses(){
   const total = S.expenses.reduce((a, e) => a + e.amount, 0);
   $('#totalSpent').textContent = S.expenses.length ? '· ' + fmt(total) : '';
   const sorted = S.expenses.map((e, i) => [e, i]).sort((a, b) => dayOf(b[0]).localeCompare(dayOf(a[0])) || b[1] - a[1]).map(x => x[0]);
-  $('#expenses').innerHTML = sorted.length ? sorted.map(e => {
+
+  // filter controls
+  const fSel = $('#fPerson');
+  fSel.innerHTML = '<option value="">Todas las personas</option>' + S.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const fp = filterPerson(); fSel.value = fp; $('#fKind').value = filt.kind; $('#fKind').disabled = !fp;
+  const paidBy = e => e.payer === fp, partOf = e => (sharesOf(e)[fp] || 0) > 0;
+  const list = !fp ? sorted : sorted.filter(e => filt.kind === 'paid' ? paidBy(e) : filt.kind === 'part' ? partOf(e) : paidBy(e) || partOf(e));
+
+  if (fp) {
+    const b = balances()[fp], n = round(b.net), nm = esc(nameOf(fp));
+    const listPaid = list.filter(paidBy).reduce((a, e) => a + e.amount, 0), listShare = list.reduce((a, e) => a + (sharesOf(e)[fp] || 0), 0);
+    $('#filterSummary').innerHTML = `<div class="fsum"><span>${nm} pagó <b>${fmt(listPaid)}</b></span><span>Su parte: <b>${fmt(listShare)}</b></span>
+      <span>Balance total: <b class="${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n > 0 ? '+' : ''}${fmt(n)}</b></span>
+      <span class="note" style="flex-basis:100%">${list.length} gasto${list.length === 1 ? '' : 's'} · ${n > 0 ? 'le deben plata' : n < 0 ? 'debe plata' : 'a paz y salvo'}</span></div>`;
+  } else $('#filterSummary').innerHTML = '';
+
+  $('#expenses').innerHTML = list.length ? list.map(e => {
     const sh = sharesOf(e), ids = Object.keys(sh);
     const who = e.mode === 'custom' ? 'por consumo' : (ids.length === S.people.length ? 'entre todos' : 'entre ' + ids.map(nameOf).join(', '));
+    const mine = fp ? `<div class="mine">${paidBy(e) ? 'Lo pagó' + (sh[fp] ? ' · ' : '') : ''}${sh[fp] ? 'Su parte: ' + fmt(sh[fp]) : ''}</div>` : '';
     return `<div class="exp"><div class="main" data-edit="${e.id}"><div class="t">${esc(e.desc || 'Gasto')}</div>
-      <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div></div>
+      <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div>${mine}</div>
       <div class="amt">${fmt(e.amount)}</div><button class="ghost" data-del-exp="${e.id}" title="Eliminar">×</button></div>`;
-  }).join('') : '<div class="empty">Aún no hay gastos.</div>';
+  }).join('') : `<div class="empty">${S.expenses.length ? 'No hay gastos con este filtro.' : 'Aún no hay gastos.'}</div>`;
 }
 
 function renderPayments(){
@@ -326,11 +358,12 @@ function renderPayments(){
   });
   if (S.people.length > 1 && $('#payTo').value === $('#payFrom').value) $('#payTo').value = S.people.find(p => p.id !== $('#payFrom').value).id;
   $('#payForm').querySelectorAll('input,select,button').forEach(el => el.disabled = S.people.length < 2);
-  const list = S.payments.map((x, i) => [x, i]).sort((a, b) => (b[0].date || '').localeCompare(a[0].date || '') || b[1] - a[1]).map(x => x[0]);
+  const fp = filterPerson();
+  const list = S.payments.filter(x => !fp || x.from === fp || x.to === fp).map((x, i) => [x, i]).sort((a, b) => (b[0].date || '').localeCompare(a[0].date || '') || b[1] - a[1]).map(x => x[0]);
   $('#payments').innerHTML = list.length ? list.map(x => `<div class="exp"><div class="main" style="cursor:default">
       <div class="t">${esc(nameOf(x.from))} → ${esc(nameOf(x.to))}</div><div class="s">${esc(fmtDay(x.date))} · ${x.note ? esc(x.note) : 'abono'}</div></div>
       <div class="amt">${fmt(x.amount)}</div><button class="ghost" data-del-pay="${x.id}" title="Eliminar">×</button></div>`).join('')
-    : '<div class="empty">Aún no hay abonos.</div>';
+    : `<div class="empty">${fp && S.payments.length ? 'No hay abonos de ' + esc(nameOf(fp)) + '.' : 'Aún no hay abonos.'}</div>`;
 }
 
 function renderSummary(){
@@ -441,6 +474,9 @@ $('#expForm').addEventListener('submit', e => {
   toast(editing ? 'Gasto actualizado' : 'Gasto agregado');
   resetForm(); $('#date').value = keepDay; render(); $('#desc').focus();
 });
+
+$('#fPerson').addEventListener('change', e => { filt.person = e.target.value; renderExpenses(); renderPayments(); });
+$('#fKind').addEventListener('change', e => { filt.kind = e.target.value; renderExpenses(); });
 
 $('#payForm').addEventListener('submit', e => {
   e.preventDefault();
