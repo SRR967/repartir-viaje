@@ -102,7 +102,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
     <form id="expForm">
       <div class="grid2">
         <label class="field"><span>¿Qué fue?</span><input id="desc" placeholder="Cena, gasolina, hotel…" autocomplete="off"></label>
-        <label class="field"><span>Valor total</span><input id="amount" inputmode="decimal" placeholder="0" autocomplete="off"></label>
+        <label class="field"><span>Valor total</span><input id="amount" class="money" inputmode="decimal" placeholder="0" autocomplete="off"></label>
       </div>
       <div class="grid2">
         <label class="field"><span>¿Quién pagó?</span><select id="payer"></select></label>
@@ -142,8 +142,9 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
         <label class="field"><span>¿Quién abonó?</span><select id="payFrom"></select></label>
         <label class="field"><span>¿A quién?</span><select id="payTo"></select></label>
       </div>
+      <label class="field"><span>Concepto</span><input id="payNote" placeholder="Ej. lo del hotel, el Uber, efectivo…" autocomplete="off"></label>
       <div class="half">
-        <label class="field"><span>Valor</span><input id="payAmount" inputmode="decimal" placeholder="0" autocomplete="off"></label>
+        <label class="field"><span>Valor</span><input id="payAmount" class="money" inputmode="decimal" placeholder="0" autocomplete="off"></label>
         <label class="field"><span>Fecha</span><input type="date" id="payDate"></label>
       </div>
       <div class="row" style="justify-content:flex-end"><button class="primary">Registrar abono</button></div>
@@ -188,16 +189,37 @@ const dayOf = e => typeof e.date === 'number' ? isoDay(e.date) : (e.date || '');
 const fmtDay = s => { if (!s) return ''; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-CO', { weekday:'short', day:'numeric', month:'short' }); };
 const nameOf = id => (S.people.find(p => p.id === id) || {}).name || '¿?';
 
+/* Money inputs use Colombian style: "." for thousands, "," for decimals. */
 function parseAmount(str){
-  str = String(str || '').trim().replace(/[^\d.,-]/g, '');
+  str = String(str || '').trim();
   if (!str) return 0;
-  if (dec() === 0) return +str.replace(/[^\d]/g, '') || 0;
-  const lc = str.lastIndexOf(','), ld = str.lastIndexOf('.');
-  const sep = Math.max(lc, ld);
-  if (sep === -1) return +str || 0;
-  const intPart = str.slice(0, sep).replace(/[.,]/g, ''), frac = str.slice(sep + 1);
-  return +(intPart + '.' + frac) || 0;
+  if (dec() === 0) return +str.replace(/\D/g, '') || 0;
+  return +str.replace(/[^\d,]/g, '').replace(',', '.') || 0;
 }
+const group = d => d.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+function cleanTyped(s){
+  if (dec() === 0) return group(String(s).replace(/\D/g, '').replace(/^0+(?=\d)/, ''));
+  s = String(s).replace(/[^\d,]/g, '');
+  const k = s.indexOf(',');
+  const int = (k < 0 ? s : s.slice(0, k)).replace(/^0+(?=\d)/, '');
+  return group(int) + (k < 0 ? '' : ',' + s.slice(k + 1).replace(/,/g, '').slice(0, dec()));
+}
+const fmtInput = n => {
+  n = round(+n || 0); if (!n) return '';
+  const [i, f] = n.toFixed(dec()).split('.');
+  return group(i) + (f && +f ? ',' + f.replace(/0+$/, '') : '');
+};
+// Format money fields while typing, keeping the cursor after the same digit.
+document.addEventListener('input', e => {
+  const el = e.target; if (!el.classList || !el.classList.contains('money')) return;
+  let raw = el.value, pos = el.selectionStart ?? raw.length;
+  if (e.data === '.' && dec() > 0 && raw[pos - 1] === '.') raw = raw.slice(0, pos - 1) + ',' + raw.slice(pos);
+  const before = raw.slice(0, pos).replace(/[^\d,]/g, '').length;
+  const v = cleanTyped(raw);
+  el.value = v;
+  let i = 0, c = 0; while (i < v.length && c < before) { if (/[\d,]/.test(v[i])) c++; i++; }
+  try { el.setSelectionRange(i, i); } catch {}
+}, true);
 
 function sharesOf(e){
   const valid = id => S.people.some(p => p.id === id);
@@ -259,7 +281,7 @@ function renderForm(){
     $('#splitBox').innerHTML = `<div class="note" style="margin-bottom:6px">Toca a quien <b>no</b> participó para quitarlo · <button type="button" class="linkbtn" data-among-all>Todos</button><button type="button" class="linkbtn" data-among-none>Nadie</button></div><div class="pick">${S.people.map(p => `<label class="${draftAmong.includes(p.id) ? 'on' : ''}"><input type="checkbox" data-among="${p.id}" ${draftAmong.includes(p.id) ? 'checked' : ''}>${esc(p.name)}</label>`).join('')}</div>
       <div class="note">${n ? `${n} persona${n > 1 ? 's' : ''}${amt ? ' · ' + fmt(amt / n) + ' c/u' : ''}` : 'Selecciona al menos una persona.'}</div>`;
   } else {
-    $('#splitBox').innerHTML = `<div class="custom">${S.people.map(p => `<span>${esc(p.name)}</span><input inputmode="decimal" placeholder="0" data-share="${p.id}" value="${draftShares[p.id] ?? ''}">`).join('')}</div>
+    $('#splitBox').innerHTML = `<div class="custom">${S.people.map(p => `<span>${esc(p.name)}</span><input class="money" inputmode="decimal" placeholder="0" data-share="${p.id}" value="${draftShares[p.id] ?? ''}">`).join('')}</div>
       <div class="note" id="customNote"></div>`;
     updateCustomNote();
   }
@@ -306,7 +328,7 @@ function renderPayments(){
   $('#payForm').querySelectorAll('input,select,button').forEach(el => el.disabled = S.people.length < 2);
   const list = S.payments.map((x, i) => [x, i]).sort((a, b) => (b[0].date || '').localeCompare(a[0].date || '') || b[1] - a[1]).map(x => x[0]);
   $('#payments').innerHTML = list.length ? list.map(x => `<div class="exp"><div class="main" style="cursor:default">
-      <div class="t">${esc(nameOf(x.from))} → ${esc(nameOf(x.to))}</div><div class="s">${esc(fmtDay(x.date))} · abono</div></div>
+      <div class="t">${esc(nameOf(x.from))} → ${esc(nameOf(x.to))}</div><div class="s">${esc(fmtDay(x.date))} · ${x.note ? esc(x.note) : 'abono'}</div></div>
       <div class="amt">${fmt(x.amount)}</div><button class="ghost" data-del-pay="${x.id}" title="Eliminar">×</button></div>`).join('')
     : '<div class="empty">Aún no hay abonos.</div>';
 }
@@ -357,7 +379,7 @@ document.addEventListener('click', e => {
     draftAmong = []; renderForm();
   } else if (t.dataset.payFrom) {
     $('#payFrom').value = t.dataset.payFrom; $('#payTo').value = t.dataset.payTo;
-    $('#payAmount').value = t.dataset.payAmt; $('#payDate').value = today();
+    $('#payAmount').value = fmtInput(t.dataset.payAmt); $('#payDate').value = today();
     $('#payCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); $('#payAmount').focus({ preventScroll: true });
     toast('Ajusta el valor si fue solo una parte');
   } else if (t.dataset.delPay) {
@@ -374,7 +396,7 @@ document.addEventListener('click', e => {
     e.preventDefault();
     const { diff } = customDiff(), empt = S.people.filter(p => !parseAmount(draftShares[p.id]));
     const f = 10 ** dec(), cents = Math.round(diff * f), base = Math.floor(cents / empt.length); let rem = cents - base * empt.length;
-    empt.forEach(p => draftShares[p.id] = String((base + (rem-- > 0 ? 1 : 0)) / f));
+    empt.forEach(p => draftShares[p.id] = fmtInput((base + (rem-- > 0 ? 1 : 0)) / f));
     renderForm();
   } else if (t.dataset.prorate !== undefined) {
     e.preventDefault();
@@ -383,11 +405,11 @@ document.addEventListener('click', e => {
     let acc = 0;
     ps.forEach((p, i) => {
       const v = i === ps.length - 1 ? round(total - acc) : round(parseAmount(draftShares[p.id]) * total / sum);
-      acc += v; draftShares[p.id] = String(v);
+      acc += v; draftShares[p.id] = fmtInput(v);
     });
     renderForm();
   } else if (t.dataset.fillTotal !== undefined) {
-    e.preventDefault(); $('#amount').value = String(customDiff().sum); updateCustomNote();
+    e.preventDefault(); $('#amount').value = fmtInput(customDiff().sum); updateCustomNote();
   }
 });
 
@@ -425,17 +447,17 @@ $('#payForm').addEventListener('submit', e => {
   const from = $('#payFrom').value, to = $('#payTo').value, amount = round(parseAmount($('#payAmount').value));
   if (from === to) return toast('Elige dos personas distintas');
   if (!(amount > 0)) return toast('Escribe un valor mayor a 0');
-  S.payments.push({ id: uid(), from, to, amount, date: $('#payDate').value || today() });
-  $('#payAmount').value = ''; render();
+  S.payments.push({ id: uid(), from, to, amount, date: $('#payDate').value || today(), note: $('#payNote').value.trim() });
+  $('#payAmount').value = ''; $('#payNote').value = ''; render();
   toast(`Abono registrado: ${nameOf(from)} → ${nameOf(to)}`);
 });
 
 function startEdit(id){
   const ex = S.expenses.find(x => x.id === id); if (!ex) return;
   editing = id; mode = ex.mode;
-  $('#desc').value = ex.desc; $('#amount').value = String(ex.amount); $('#payer').value = ex.payer; $('#date').value = dayOf(ex) || today();
+  $('#desc').value = ex.desc; $('#amount').value = fmtInput(ex.amount); $('#payer').value = ex.payer; $('#date').value = dayOf(ex) || today();
   draftAmong = ex.mode === 'equal' ? [...ex.among] : S.people.map(p => p.id);
-  draftShares = {}; if (ex.shares) for (const k in ex.shares) draftShares[k] = String(ex.shares[k]);
+  draftShares = {}; if (ex.shares) for (const k in ex.shares) draftShares[k] = fmtInput(ex.shares[k]);
   $('#formTitle').textContent = 'Editar gasto'; $('#saveExp').textContent = 'Guardar cambios'; $('#cancelEdit').hidden = false;
   renderForm(); $('#payer').value = ex.payer;
   $('#expenseCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -477,7 +499,7 @@ $('#shareLink').addEventListener('click', async () => {
 $('#copyText').addEventListener('click', () => {
   const b = balances(), t = settle(b), total = S.expenses.reduce((a, e) => a + e.amount, 0);
   const lines = [`*${S.name}* — total ${fmt(total)}`, '', ...S.people.map(p => `• ${p.name}: pagó ${fmt(b[p.id].paid)}, consumió ${fmt(b[p.id].owed)}`),
-    ...(S.payments.length ? ['', '*Abonos:*', ...S.payments.map(x => `• ${nameOf(x.from)} → ${nameOf(x.to)}: ${fmt(x.amount)}`)] : []),
+    ...(S.payments.length ? ['', '*Abonos:*', ...S.payments.map(x => `• ${nameOf(x.from)} → ${nameOf(x.to)}: ${fmt(x.amount)}${x.note ? ' (' + x.note + ')' : ''}`)] : []),
     '', '*Para quedar a paz y salvo:*',
     ...(t.length ? t.map(x => `→ ${nameOf(x.from)} le paga ${fmt(x.amt)} a ${nameOf(x.to)}`) : ['Nadie le debe a nadie 🎉'])];
   copy(lines.join('\n'), 'Resumen copiado');
