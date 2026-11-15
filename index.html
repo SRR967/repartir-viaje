@@ -49,11 +49,18 @@ button.ghost:hover{color:var(--danger)}
 .linkbtn{border:0;background:none;color:var(--accent);padding:0 4px;font-size:13px;text-decoration:underline}
 .half{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 button.small{padding:5px 10px;font-size:13px}
+.moneybox{display:flex;gap:6px;min-width:0}.moneybox input{flex:1;min-width:0}
+button.plus{padding:0 13px;font-weight:700;font-size:18px;line-height:1;color:var(--accent)}
+.eq{grid-column:2;font-size:12px;color:var(--muted);text-align:right;margin-top:-3px}.eq:empty{display:none}
+#amountHint:empty{display:none}
+details.det{margin-top:4px}details.det summary{cursor:pointer;color:var(--accent);font-size:13px;width:max-content}
+details.det div{font-size:13px;color:var(--muted)}details.det b{color:var(--ink);font-weight:600}
 .filters{margin-bottom:10px}.filters select{flex:1;min-width:150px}
 .fsum{display:flex;flex-wrap:wrap;gap:6px 16px;background:var(--accent-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
 .fsum b{white-space:nowrap}
 .exp .mine{font-size:13px;color:var(--accent);font-weight:600}
-.custom{display:grid;grid-template-columns:1fr 140px;gap:6px 10px;align-items:center}
+.note a{color:var(--accent)}
+.custom{display:grid;grid-template-columns:minmax(60px,max-content) minmax(0,1fr);gap:6px 10px;align-items:center}
 .field{display:grid;gap:4px;margin-bottom:10px}
 .field>span{font-size:13px;color:var(--muted)}
 .grid2{display:grid;grid-template-columns:2fr 1fr;gap:10px}
@@ -78,8 +85,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
 .toast.show{opacity:1}
 .scroll{overflow-x:auto}
-@media (max-width:520px){.grid2{grid-template-columns:1fr}.custom{grid-template-columns:1fr 120px}
-  th,td{padding:8px 3px;font-size:13px}.card{padding:14px 12px}
+@media (max-width:520px){.grid2{grid-template-columns:1fr}  th,td{padding:8px 3px;font-size:13px}.card{padding:14px 12px}
   table.wide th,table.wide td{font-size:12px;padding:8px 2px;letter-spacing:-.01em}}
 </style>
 </head>
@@ -106,7 +112,10 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
     <form id="expForm">
       <div class="grid2">
         <label class="field"><span>¿Qué fue?</span><input id="desc" placeholder="Cena, gasolina, hotel…" autocomplete="off"></label>
-        <label class="field"><span>Valor total</span><input id="amount" class="money" inputmode="decimal" placeholder="0" autocomplete="off"></label>
+        <div class="field"><span>Valor total</span>
+          <div class="moneybox"><input id="amount" class="money" inputmode="decimal" placeholder="0" autocomplete="off" aria-label="Valor total"><button type="button" class="plus" data-plus title="Sumar otro valor">+</button></div>
+          <div class="note" id="amountHint"></div>
+        </div>
       </div>
       <div class="grid2">
         <label class="field"><span>¿Quién pagó?</span><select id="payer"></select></label>
@@ -205,11 +214,19 @@ const fmtDay = s => { if (!s) return ''; const [y, m, d] = s.split('-').map(Numb
 const nameOf = id => (S.people.find(p => p.id === id) || {}).name || '¿?';
 
 /* Money inputs use Colombian style: "." for thousands, "," for decimals. */
-function parseAmount(str){
+/* A field may hold several values joined with "+" (e.g. "15.000 + 12.000 + 3.000"). */
+function parseOne(str){
   str = String(str || '').trim();
   if (!str) return 0;
   if (dec() === 0) return +str.replace(/\D/g, '') || 0;
   return +str.replace(/[^\d,]/g, '').replace(',', '.') || 0;
+}
+const partsOf = str => String(str || '').split('+').map(parseOne).filter(v => v > 0).map(round);
+const parseAmount = str => partsOf(str).reduce((a, v) => a + v, 0);
+const partsText = ps => ps.map(fmtInput).join(' + ');
+function cleanExpr(s){
+  const terms = String(s).split('+').map(cleanTyped), last = terms.pop();
+  return terms.filter(Boolean).concat([last]).join(' + ');
 }
 const group = d => d.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 function cleanTyped(s){
@@ -229,10 +246,11 @@ document.addEventListener('input', e => {
   const el = e.target; if (!el.classList || !el.classList.contains('money')) return;
   let raw = el.value, pos = el.selectionStart ?? raw.length;
   if (e.data === '.' && dec() > 0 && raw[pos - 1] === '.') raw = raw.slice(0, pos - 1) + ',' + raw.slice(pos);
-  const before = raw.slice(0, pos).replace(/[^\d,]/g, '').length;
-  const v = cleanTyped(raw);
+  const before = raw.slice(0, pos).replace(/[^\d,+]/g, '').length;
+  const v = cleanExpr(raw);
   el.value = v;
-  let i = 0, c = 0; while (i < v.length && c < before) { if (/[\d,]/.test(v[i])) c++; i++; }
+  let i = 0, c = 0; while (i < v.length && c < before) { if (/[\d,+]/.test(v[i])) c++; i++; }
+  if (v[i] === ' ' && v[i - 1] === '+') i++;
   try { el.setSelectionRange(i, i); } catch {}
 }, true);
 
@@ -296,7 +314,7 @@ function renderForm(){
     $('#splitBox').innerHTML = `<div class="note" style="margin-bottom:6px">Toca a quien <b>no</b> participó para quitarlo · <button type="button" class="linkbtn" data-among-all>Todos</button><button type="button" class="linkbtn" data-among-none>Nadie</button></div><div class="pick">${S.people.map(p => `<label class="${draftAmong.includes(p.id) ? 'on' : ''}"><input type="checkbox" data-among="${p.id}" ${draftAmong.includes(p.id) ? 'checked' : ''}>${esc(p.name)}</label>`).join('')}</div>
       <div class="note">${n ? `${n} persona${n > 1 ? 's' : ''}${amt ? ' · ' + fmt(amt / n) + ' c/u' : ''}` : 'Selecciona al menos una persona.'}</div>`;
   } else {
-    $('#splitBox').innerHTML = `<div class="custom">${S.people.map(p => `<span>${esc(p.name)}</span><input class="money" inputmode="decimal" placeholder="0" data-share="${p.id}" value="${draftShares[p.id] ?? ''}">`).join('')}</div>
+    $('#splitBox').innerHTML = `<div class="custom">${S.people.map(p => `<span>${esc(p.name)}</span><div class="moneybox"><input class="money" inputmode="decimal" placeholder="0" data-share="${p.id}" value="${esc(draftShares[p.id] ?? '')}" aria-label="Consumo de ${esc(p.name)}"><button type="button" class="plus" data-plus title="Sumar otro valor">+</button></div><div class="eq" data-eq="${p.id}"></div>`).join('')}</div>
       <div class="note" id="customNote"></div>`;
     updateCustomNote();
   }
@@ -307,7 +325,15 @@ function customDiff(){
   const sum = S.people.reduce((a, p) => a + parseAmount(draftShares[p.id]), 0);
   return { total, sum, diff: round(total - sum) };
 }
+function updateAmountHint(){
+  const ps = partsOf($('#amount').value);
+  $('#amountHint').textContent = ps.length > 1 ? `= ${fmt(parseAmount($('#amount').value))} (${ps.length} valores)` : '';
+}
 function updateCustomNote(){
+  document.querySelectorAll('[data-eq]').forEach(el => {
+    const ps = partsOf(draftShares[el.dataset.eq]);
+    el.textContent = ps.length > 1 ? `= ${fmt(ps.reduce((a, v) => a + v, 0))}` : '';
+  });
   const el = $('#customNote'); if (!el) return;
   const { total, sum, diff } = customDiff();
   if (!total && sum) { el.className = 'note'; el.innerHTML = `Suma: ${fmt(sum)} · <a href="#" data-fill-total>usar como total</a>`; return; }
@@ -344,8 +370,15 @@ function renderExpenses(){
     const sh = sharesOf(e), ids = Object.keys(sh);
     const who = e.mode === 'custom' ? 'por consumo' : (ids.length === S.people.length ? 'entre todos' : 'entre ' + ids.map(nameOf).join(', '));
     const mine = fp ? `<div class="mine">${paidBy(e) ? 'Lo pagó' + (sh[fp] ? ' · ' : '') : ''}${sh[fp] ? 'Su parte: ' + fmt(sh[fp]) : ''}</div>` : '';
+    const det = [];
+    if (e.amountParts && e.amountParts.length > 1) det.push(`<div>Total: ${partsText(e.amountParts)} = <b>${fmt(e.amount)}</b></div>`);
+    if (e.mode === 'custom') ids.forEach(id => {
+      const ps = e.shareParts && e.shareParts[id];
+      det.push(`<div>${esc(nameOf(id))}: ${ps && ps.length > 1 ? partsText(ps) + ' = ' : ''}<b>${fmt(sh[id])}</b></div>`);
+    });
+    const detail = det.length ? `<details class="det"${fp ? ' open' : ''}><summary>Ver detalle</summary>${det.join('')}</details>` : '';
     return `<div class="exp"><div class="main" data-edit="${e.id}"><div class="t">${esc(e.desc || 'Gasto')}</div>
-      <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div>${mine}</div>
+      <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div>${mine}${detail}</div>
       <div class="amt">${fmt(e.amount)}</div><button class="ghost" data-del-exp="${e.id}" title="Eliminar">×</button></div>`;
   }).join('') : `<div class="empty">${S.expenses.length ? 'No hay gastos con este filtro.' : 'Aún no hay gastos.'}</div>`;
 }
@@ -406,6 +439,11 @@ document.addEventListener('click', e => {
     S.expenses.forEach(x => { x.among = (x.among || []).filter(a => a !== id); if (x.shares) delete x.shares[id]; });
     if (draftAmong) draftAmong = draftAmong.filter(a => a !== id);
     render();
+  } else if (t.dataset.plus !== undefined) {
+    const inp = t.previousElementSibling;
+    if (inp.value.trim() && !/\+\s*$/.test(inp.value)) inp.value = inp.value.trim() + ' + ';
+    inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length);
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
   } else if (t.dataset.amongAll !== undefined) {
     draftAmong = S.people.map(p => p.id); renderForm();
   } else if (t.dataset.amongNone !== undefined) {
@@ -423,7 +461,7 @@ document.addEventListener('click', e => {
   } else if (t.dataset.delExp) {
     const ex = S.expenses.find(x => x.id === t.dataset.delExp);
     if (confirm(`¿Eliminar "${ex.desc || 'Gasto'}"?`)) { S.expenses = S.expenses.filter(x => x !== ex); if (editing === ex.id) resetForm(); render(); }
-  } else if (t.closest('[data-edit]')) {
+  } else if (t.closest('[data-edit]') && !t.closest('details')) {
     startEdit(t.closest('[data-edit]').dataset.edit);
   } else if (t.dataset.fillRest !== undefined) {
     e.preventDefault();
@@ -452,21 +490,26 @@ $('#splitBox').addEventListener('change', e => {
   renderForm();
 });
 $('#splitBox').addEventListener('input', e => { const id = e.target.dataset.share; if (id) { draftShares[id] = e.target.value; updateCustomNote(); } });
-$('#amount').addEventListener('input', () => mode === 'equal' ? renderForm() : updateCustomNote());
+$('#amount').addEventListener('input', () => { updateAmountHint(); mode === 'equal' ? renderForm() : updateCustomNote(); });
 
 $('#expForm').addEventListener('submit', e => {
   e.preventDefault();
   const amount = round(parseAmount($('#amount').value));
   if (!(amount > 0)) return toast('Escribe un valor mayor a 0');
-  const base = { desc: $('#desc').value.trim(), amount, payer: $('#payer').value, mode, date: $('#date').value || today() };
+  const aParts = partsOf($('#amount').value);
+  const base = { desc: $('#desc').value.trim(), amount, payer: $('#payer').value, mode, date: $('#date').value || today(), amountParts: aParts.length > 1 ? aParts : null, shareParts: null };
   if (mode === 'equal') {
     const among = draftAmong.filter(id => S.people.some(p => p.id === id));
     if (!among.length) return toast('Selecciona quiénes participan');
     Object.assign(base, { among, shares: null });
   } else {
-    const shares = {}; S.people.forEach(p => { const v = round(parseAmount(draftShares[p.id])); if (v) shares[p.id] = v; });
+    const shares = {}, shareParts = {};
+    S.people.forEach(p => {
+      const ps = partsOf(draftShares[p.id]), v = round(ps.reduce((a, x) => a + x, 0));
+      if (v) shares[p.id] = v; if (ps.length > 1) shareParts[p.id] = ps;
+    });
     if (customDiff().diff !== 0) return toast('Lo asignado no cuadra con el total');
-    Object.assign(base, { shares, among: [] });
+    Object.assign(base, { shares, among: [], shareParts: Object.keys(shareParts).length ? shareParts : null });
   }
   if (editing) Object.assign(S.expenses.find(x => x.id === editing), base);
   else S.expenses.push({ id: uid(), ...base });
@@ -491,16 +534,17 @@ $('#payForm').addEventListener('submit', e => {
 function startEdit(id){
   const ex = S.expenses.find(x => x.id === id); if (!ex) return;
   editing = id; mode = ex.mode;
-  $('#desc').value = ex.desc; $('#amount').value = fmtInput(ex.amount); $('#payer').value = ex.payer; $('#date').value = dayOf(ex) || today();
+  $('#desc').value = ex.desc; $('#amount').value = ex.amountParts ? partsText(ex.amountParts) : fmtInput(ex.amount); $('#payer').value = ex.payer; $('#date').value = dayOf(ex) || today();
   draftAmong = ex.mode === 'equal' ? [...ex.among] : S.people.map(p => p.id);
-  draftShares = {}; if (ex.shares) for (const k in ex.shares) draftShares[k] = fmtInput(ex.shares[k]);
+  draftShares = {}; if (ex.shares) for (const k in ex.shares) draftShares[k] = ex.shareParts && ex.shareParts[k] ? partsText(ex.shareParts[k]) : fmtInput(ex.shares[k]);
+  updateAmountHint();
   $('#formTitle').textContent = 'Editar gasto'; $('#saveExp').textContent = 'Guardar cambios'; $('#cancelEdit').hidden = false;
   renderForm(); $('#payer').value = ex.payer;
   $('#expenseCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function resetForm(){
   editing = null; draftAmong = null; draftShares = {};
-  $('#desc').value = ''; $('#amount').value = ''; $('#date').value = today();
+  $('#desc').value = ''; $('#amount').value = ''; $('#date').value = today(); $('#amountHint').textContent = '';
   $('#formTitle').textContent = 'Nuevo gasto'; $('#saveExp').textContent = 'Agregar gasto'; $('#cancelEdit').hidden = true;
 }
 $('#cancelEdit').addEventListener('click', () => { resetForm(); renderForm(); });
