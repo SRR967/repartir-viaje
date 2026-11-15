@@ -98,7 +98,10 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
         <label class="field"><span>¿Qué fue?</span><input id="desc" placeholder="Cena, gasolina, hotel…" autocomplete="off"></label>
         <label class="field"><span>Valor total</span><input id="amount" inputmode="decimal" placeholder="0" autocomplete="off"></label>
       </div>
-      <label class="field"><span>¿Quién pagó?</span><select id="payer"></select></label>
+      <div class="grid2">
+        <label class="field"><span>¿Quién pagó?</span><select id="payer"></select></label>
+        <label class="field"><span>Fecha</span><input type="date" id="date"></label>
+      </div>
       <div class="field"><span>¿Cómo se divide?</span>
         <div class="toggle"><button type="button" data-mode="equal">Partes iguales</button><button type="button" data-mode="custom">Lo que cada uno consumió</button></div>
       </div>
@@ -155,6 +158,10 @@ function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} 
 const dec = () => ['COP','CLP','JPY','PYG'].includes(S.currency) ? 0 : 2;
 const round = n => { const f = 10 ** dec(); return Math.round(n * f) / f; };
 const fmt = n => new Intl.NumberFormat('es-CO', { style:'currency', currency:S.currency, maximumFractionDigits:dec(), minimumFractionDigits:0 }).format(round(n) || 0);
+const isoDay = d => { d = new Date(d); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const today = () => isoDay(Date.now());
+const dayOf = e => typeof e.date === 'number' ? isoDay(e.date) : (e.date || '');
+const fmtDay = s => { if (!s) return ''; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-CO', { weekday:'short', day:'numeric', month:'short' }); };
 const nameOf = id => (S.people.find(p => p.id === id) || {}).name || '¿?';
 
 function parseAmount(str){
@@ -253,11 +260,12 @@ function updateCustomNote(){
 function renderExpenses(){
   const total = S.expenses.reduce((a, e) => a + e.amount, 0);
   $('#totalSpent').textContent = S.expenses.length ? '· ' + fmt(total) : '';
-  $('#expenses').innerHTML = S.expenses.length ? S.expenses.slice().reverse().map(e => {
+  const sorted = S.expenses.map((e, i) => [e, i]).sort((a, b) => dayOf(b[0]).localeCompare(dayOf(a[0])) || b[1] - a[1]).map(x => x[0]);
+  $('#expenses').innerHTML = sorted.length ? sorted.map(e => {
     const sh = sharesOf(e), ids = Object.keys(sh);
     const who = e.mode === 'custom' ? 'por consumo' : (ids.length === S.people.length ? 'entre todos' : 'entre ' + ids.map(nameOf).join(', '));
     return `<div class="exp"><div class="main" data-edit="${e.id}"><div class="t">${esc(e.desc || 'Gasto')}</div>
-      <div class="s">Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div></div>
+      <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div></div>
       <div class="amt">${fmt(e.amount)}</div><button class="ghost" data-del-exp="${e.id}" title="Eliminar">×</button></div>`;
   }).join('') : '<div class="empty">Aún no hay gastos.</div>';
 }
@@ -339,7 +347,7 @@ $('#expForm').addEventListener('submit', e => {
   e.preventDefault();
   const amount = round(parseAmount($('#amount').value));
   if (!(amount > 0)) return toast('Escribe un valor mayor a 0');
-  const base = { desc: $('#desc').value.trim(), amount, payer: $('#payer').value, mode };
+  const base = { desc: $('#desc').value.trim(), amount, payer: $('#payer').value, mode, date: $('#date').value || today() };
   if (mode === 'equal') {
     const among = draftAmong.filter(id => S.people.some(p => p.id === id));
     if (!among.length) return toast('Selecciona quiénes participan');
@@ -350,15 +358,16 @@ $('#expForm').addEventListener('submit', e => {
     Object.assign(base, { shares, among: [] });
   }
   if (editing) Object.assign(S.expenses.find(x => x.id === editing), base);
-  else S.expenses.push({ id: uid(), date: Date.now(), ...base });
+  else S.expenses.push({ id: uid(), ...base });
+  const keepDay = base.date;
   toast(editing ? 'Gasto actualizado' : 'Gasto agregado');
-  resetForm(); render(); $('#desc').focus();
+  resetForm(); $('#date').value = keepDay; render(); $('#desc').focus();
 });
 
 function startEdit(id){
   const ex = S.expenses.find(x => x.id === id); if (!ex) return;
   editing = id; mode = ex.mode;
-  $('#desc').value = ex.desc; $('#amount').value = String(ex.amount); $('#payer').value = ex.payer;
+  $('#desc').value = ex.desc; $('#amount').value = String(ex.amount); $('#payer').value = ex.payer; $('#date').value = dayOf(ex) || today();
   draftAmong = ex.mode === 'equal' ? [...ex.among] : S.people.map(p => p.id);
   draftShares = {}; if (ex.shares) for (const k in ex.shares) draftShares[k] = String(ex.shares[k]);
   $('#formTitle').textContent = 'Editar gasto'; $('#saveExp').textContent = 'Guardar cambios'; $('#cancelEdit').hidden = false;
@@ -367,7 +376,7 @@ function startEdit(id){
 }
 function resetForm(){
   editing = null; draftAmong = null; draftShares = {};
-  $('#desc').value = ''; $('#amount').value = '';
+  $('#desc').value = ''; $('#amount').value = ''; $('#date').value = today();
   $('#formTitle').textContent = 'Nuevo gasto'; $('#saveExp').textContent = 'Agregar gasto'; $('#cancelEdit').hidden = true;
 }
 $('#cancelEdit').addEventListener('click', () => { resetForm(); renderForm(); });
@@ -428,6 +437,7 @@ $('#reset').addEventListener('click', () => { if (confirm('¿Borrar todas las pe
     } catch { toast('El enlace no es válido'); }
     history.replaceState(null, '', location.pathname + location.search);
   }
+  $('#date').value = today();
   render();
 })();
 </script>
