@@ -44,6 +44,11 @@ button.ghost:hover{color:var(--danger)}
 .pick label{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer;user-select:none}
 .pick input{display:none}
 .pick label.on{background:var(--accent-soft);border-color:var(--accent)}
+.pick label:not(.on){color:var(--muted);text-decoration:line-through}
+.pick label.on::before{content:"✓";color:var(--accent);font-weight:700}
+.linkbtn{border:0;background:none;color:var(--accent);padding:0 4px;font-size:13px;text-decoration:underline}
+.half{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button.small{padding:5px 10px;font-size:13px}
 .custom{display:grid;grid-template-columns:1fr 140px;gap:6px 10px;align-items:center}
 .field{display:grid;gap:4px;margin-bottom:10px}
 .field>span{font-size:13px;color:var(--muted)}
@@ -62,7 +67,7 @@ th,td{text-align:right;padding:8px 6px;border-top:1px solid var(--line);white-sp
 th:first-child,td:first-child{text-align:left}
 th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
 .pos{color:var(--accent);font-weight:600}.neg{color:var(--danger);font-weight:600}
-.tx{display:flex;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:10px;background:var(--bg);margin-bottom:6px}
+.tx{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:10px 12px;border-radius:10px;background:var(--bg);margin-bottom:6px}
 .tx b{white-space:nowrap}
 .empty{color:var(--muted);font-size:14px;padding:6px 0}
 .tools{display:flex;gap:8px;flex-wrap:wrap}
@@ -70,7 +75,8 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
 .toast.show{opacity:1}
 .scroll{overflow-x:auto}
 @media (max-width:520px){.grid2{grid-template-columns:1fr}.custom{grid-template-columns:1fr 120px}
-  th,td{padding:8px 3px;font-size:13px}.card{padding:14px 12px}}
+  th,td{padding:8px 3px;font-size:13px}.card{padding:14px 12px}
+  table.wide th,table.wide td{font-size:12px;padding:8px 2px;letter-spacing:-.01em}}
 </style>
 </head>
 <body>
@@ -128,6 +134,23 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
     <div id="settle"></div>
   </section>
 
+  <section class="card" id="payCard">
+    <h2>Abonos</h2>
+    <p class="note" style="margin-top:0">Registra cuando alguien le devuelve plata a otro, sea todo o una parte. Se descuenta de lo que debe.</p>
+    <form id="payForm">
+      <div class="half">
+        <label class="field"><span>¿Quién abonó?</span><select id="payFrom"></select></label>
+        <label class="field"><span>¿A quién?</span><select id="payTo"></select></label>
+      </div>
+      <div class="half">
+        <label class="field"><span>Valor</span><input id="payAmount" inputmode="decimal" placeholder="0" autocomplete="off"></label>
+        <label class="field"><span>Fecha</span><input type="date" id="payDate"></label>
+      </div>
+      <div class="row" style="justify-content:flex-end"><button class="primary">Registrar abono</button></div>
+    </form>
+    <div id="payments" style="margin-top:8px"></div>
+  </section>
+
   <section class="card">
     <h2>Compartir y respaldo</h2>
     <p class="note" style="margin-top:0">Los datos se guardan en este navegador. Para que otros vean el viaje, comparte el enlace (es una copia del estado actual).</p>
@@ -150,7 +173,8 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const blank = () => ({ name: 'Mi viaje', currency: 'COP', people: [], expenses: [] });
 
-let S = load() || blank();
+const norm = d => { if (!Array.isArray(d.payments)) d.payments = []; return d; };
+let S = norm(load() || blank());
 let mode = 'equal', editing = null, draftAmong = null, draftShares = {};
 
 function load(){ try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
@@ -189,17 +213,19 @@ function sharesOf(e){
 }
 
 function balances(){
-  const b = {}; S.people.forEach(p => b[p.id] = { paid:0, owed:0 });
+  const b = {}; S.people.forEach(p => b[p.id] = { paid:0, owed:0, sent:0, recv:0 });
   S.expenses.forEach(e => {
     if (b[e.payer]) b[e.payer].paid += e.amount;
     const sh = sharesOf(e); for (const id in sh) if (b[id]) b[id].owed += sh[id];
   });
+  S.payments.forEach(x => { if (b[x.from]) b[x.from].sent += x.amount; if (b[x.to]) b[x.to].recv += x.amount; });
+  for (const id in b) b[id].net = b[id].paid - b[id].owed + b[id].sent - b[id].recv;
   return b;
 }
 
 function settle(b){
   const eps = 0.5 / 10 ** dec(), cred = [], debt = [];
-  for (const id in b) { const n = b[id].paid - b[id].owed; if (n > eps) cred.push({id, n}); else if (n < -eps) debt.push({id, n:-n}); }
+  for (const id in b) { const n = b[id].net; if (n > eps) cred.push({id, n}); else if (n < -eps) debt.push({id, n:-n}); }
   cred.sort((x, y) => y.n - x.n); debt.sort((x, y) => y.n - x.n);
   const t = []; let i = 0, j = 0;
   while (i < debt.length && j < cred.length) {
@@ -217,7 +243,7 @@ function render(){
   $('#people').innerHTML = S.people.length
     ? S.people.map(p => `<span class="chip">${esc(p.name)}<button data-del-person="${p.id}" title="Quitar">×</button></span>`).join('')
     : '<div class="empty">Agrega a los que van en el viaje.</div>';
-  renderForm(); renderExpenses(); renderSummary(); save();
+  renderForm(); renderExpenses(); renderPayments(); renderSummary(); save();
 }
 
 function renderForm(){
@@ -230,7 +256,7 @@ function renderForm(){
   if (!draftAmong) draftAmong = S.people.map(p => p.id);
   if (mode === 'equal') {
     const n = draftAmong.filter(id => S.people.some(p => p.id === id)).length, amt = parseAmount($('#amount').value);
-    $('#splitBox').innerHTML = `<div class="pick">${S.people.map(p => `<label class="${draftAmong.includes(p.id) ? 'on' : ''}"><input type="checkbox" data-among="${p.id}" ${draftAmong.includes(p.id) ? 'checked' : ''}>${esc(p.name)}</label>`).join('')}</div>
+    $('#splitBox').innerHTML = `<div class="note" style="margin-bottom:6px">Toca a quien <b>no</b> participó para quitarlo · <button type="button" class="linkbtn" data-among-all>Todos</button><button type="button" class="linkbtn" data-among-none>Nadie</button></div><div class="pick">${S.people.map(p => `<label class="${draftAmong.includes(p.id) ? 'on' : ''}"><input type="checkbox" data-among="${p.id}" ${draftAmong.includes(p.id) ? 'checked' : ''}>${esc(p.name)}</label>`).join('')}</div>
       <div class="note">${n ? `${n} persona${n > 1 ? 's' : ''}${amt ? ' · ' + fmt(amt / n) + ' c/u' : ''}` : 'Selecciona al menos una persona.'}</div>`;
   } else {
     $('#splitBox').innerHTML = `<div class="custom">${S.people.map(p => `<span>${esc(p.name)}</span><input inputmode="decimal" placeholder="0" data-share="${p.id}" value="${draftShares[p.id] ?? ''}">`).join('')}</div>
@@ -270,15 +296,32 @@ function renderExpenses(){
   }).join('') : '<div class="empty">Aún no hay gastos.</div>';
 }
 
+function renderPayments(){
+  ['#payFrom', '#payTo'].forEach(sel => {
+    const el = $(sel), cur = el.value;
+    el.innerHTML = S.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    if (S.people.some(p => p.id === cur)) el.value = cur;
+  });
+  if (S.people.length > 1 && $('#payTo').value === $('#payFrom').value) $('#payTo').value = S.people.find(p => p.id !== $('#payFrom').value).id;
+  $('#payForm').querySelectorAll('input,select,button').forEach(el => el.disabled = S.people.length < 2);
+  const list = S.payments.map((x, i) => [x, i]).sort((a, b) => (b[0].date || '').localeCompare(a[0].date || '') || b[1] - a[1]).map(x => x[0]);
+  $('#payments').innerHTML = list.length ? list.map(x => `<div class="exp"><div class="main" style="cursor:default">
+      <div class="t">${esc(nameOf(x.from))} → ${esc(nameOf(x.to))}</div><div class="s">${esc(fmtDay(x.date))} · abono</div></div>
+      <div class="amt">${fmt(x.amount)}</div><button class="ghost" data-del-pay="${x.id}" title="Eliminar">×</button></div>`).join('')
+    : '<div class="empty">Aún no hay abonos.</div>';
+}
+
 function renderSummary(){
-  const b = balances();
-  $('#summary').innerHTML = S.people.length ? `<tr><th>Persona</th><th>Pagó</th><th>Consumió</th><th>Balance</th></tr>` + S.people.map(p => {
-    const n = round(b[p.id].paid - b[p.id].owed);
-    return `<tr><td>${esc(p.name)}</td><td>${fmt(b[p.id].paid)}</td><td>${fmt(b[p.id].owed)}</td><td class="${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n > 0 ? '+' : ''}${fmt(n)}</td></tr>`;
-  }).join('') : '<tr><td class="empty">Sin personas.</td></tr>';
+  const b = balances(), hasPay = S.payments.length > 0;
+  $('#summary').classList.toggle('wide', hasPay);
+  $('#summary').innerHTML = S.people.length ? `<tr><th>Persona</th><th>Pagó</th><th>Consumió</th>${hasPay ? '<th>Abonos</th>' : ''}<th>Balance</th></tr>` + S.people.map(p => {
+    const n = round(b[p.id].net), ab = round(b[p.id].sent - b[p.id].recv);
+    return `<tr><td>${esc(p.name)}</td><td>${fmt(b[p.id].paid)}</td><td>${fmt(b[p.id].owed)}</td>${hasPay ? `<td>${ab > 0 ? '+' : ''}${fmt(ab)}</td>` : ''}<td class="${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n > 0 ? '+' : ''}${fmt(n)}</td></tr>`;
+  }).join('') + (hasPay ? `<tr><td colspan="5" class="note" style="text-align:left;white-space:normal">Abonos: + lo que entregó, − lo que recibió.</td></tr>` : '') : '<tr><td class="empty">Sin personas.</td></tr>';
   const t = settle(b);
   $('#settle').innerHTML = !S.expenses.length ? '<div class="empty">Cuando agregues gastos verás aquí quién le paga a quién.</div>'
-    : t.length ? t.map(x => `<div class="tx"><span><b>${esc(nameOf(x.from))}</b> le paga a <b>${esc(nameOf(x.to))}</b></span><b>${fmt(x.amt)}</b></div>`).join('')
+    : t.length ? t.map(x => `<div class="tx"><span><b>${esc(nameOf(x.from))}</b> le paga a <b>${esc(nameOf(x.to))}</b></span>
+        <span class="row" style="flex-wrap:nowrap;gap:10px"><b>${fmt(x.amt)}</b><button class="small" data-pay-from="${x.from}" data-pay-to="${x.to}" data-pay-amt="${round(x.amt)}">Abonar</button></span></div>`).join('')
       + `<div class="note">${t.length} transferencia${t.length > 1 ? 's' : ''} en total.</div>`
     : '<div class="empty">Todos están a paz y salvo 🎉</div>';
 }
@@ -303,10 +346,23 @@ document.addEventListener('click', e => {
   if (t.dataset.delPerson) {
     const id = t.dataset.delPerson;
     if (S.expenses.some(x => x.payer === id || (sharesOf(x)[id] || 0) > 0)) return toast('Tiene gastos asociados; edítalos primero.');
+    if (S.payments.some(x => x.from === id || x.to === id)) return toast('Tiene abonos asociados; bórralos primero.');
     S.people = S.people.filter(p => p.id !== id);
     S.expenses.forEach(x => { x.among = (x.among || []).filter(a => a !== id); if (x.shares) delete x.shares[id]; });
     if (draftAmong) draftAmong = draftAmong.filter(a => a !== id);
     render();
+  } else if (t.dataset.amongAll !== undefined) {
+    draftAmong = S.people.map(p => p.id); renderForm();
+  } else if (t.dataset.amongNone !== undefined) {
+    draftAmong = []; renderForm();
+  } else if (t.dataset.payFrom) {
+    $('#payFrom').value = t.dataset.payFrom; $('#payTo').value = t.dataset.payTo;
+    $('#payAmount').value = t.dataset.payAmt; $('#payDate').value = today();
+    $('#payCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); $('#payAmount').focus({ preventScroll: true });
+    toast('Ajusta el valor si fue solo una parte');
+  } else if (t.dataset.delPay) {
+    const x = S.payments.find(p => p.id === t.dataset.delPay);
+    if (confirm(`¿Eliminar el abono de ${nameOf(x.from)} a ${nameOf(x.to)} por ${fmt(x.amount)}?`)) { S.payments = S.payments.filter(p => p !== x); render(); }
   } else if (t.dataset.mode) {
     mode = t.dataset.mode; renderForm();
   } else if (t.dataset.delExp) {
@@ -364,6 +420,16 @@ $('#expForm').addEventListener('submit', e => {
   resetForm(); $('#date').value = keepDay; render(); $('#desc').focus();
 });
 
+$('#payForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const from = $('#payFrom').value, to = $('#payTo').value, amount = round(parseAmount($('#payAmount').value));
+  if (from === to) return toast('Elige dos personas distintas');
+  if (!(amount > 0)) return toast('Escribe un valor mayor a 0');
+  S.payments.push({ id: uid(), from, to, amount, date: $('#payDate').value || today() });
+  $('#payAmount').value = ''; render();
+  toast(`Abono registrado: ${nameOf(from)} → ${nameOf(to)}`);
+});
+
 function startEdit(id){
   const ex = S.expenses.find(x => x.id === id); if (!ex) return;
   editing = id; mode = ex.mode;
@@ -410,7 +476,9 @@ $('#shareLink').addEventListener('click', async () => {
 });
 $('#copyText').addEventListener('click', () => {
   const b = balances(), t = settle(b), total = S.expenses.reduce((a, e) => a + e.amount, 0);
-  const lines = [`*${S.name}* — total ${fmt(total)}`, '', ...S.people.map(p => `• ${p.name}: pagó ${fmt(b[p.id].paid)}, consumió ${fmt(b[p.id].owed)}`), '', '*Para quedar a paz y salvo:*',
+  const lines = [`*${S.name}* — total ${fmt(total)}`, '', ...S.people.map(p => `• ${p.name}: pagó ${fmt(b[p.id].paid)}, consumió ${fmt(b[p.id].owed)}`),
+    ...(S.payments.length ? ['', '*Abonos:*', ...S.payments.map(x => `• ${nameOf(x.from)} → ${nameOf(x.to)}: ${fmt(x.amount)}`)] : []),
+    '', '*Para quedar a paz y salvo:*',
     ...(t.length ? t.map(x => `→ ${nameOf(x.from)} le paga ${fmt(x.amt)} a ${nameOf(x.to)}`) : ['Nadie le debe a nadie 🎉'])];
   copy(lines.join('\n'), 'Resumen copiado');
 });
@@ -422,22 +490,22 @@ $('#exportJson').addEventListener('click', () => {
 $('#importJson').addEventListener('click', () => $('#file').click());
 $('#file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  try { const d = JSON.parse(await f.text()); if (!valid(d)) throw 0; if (confirm('¿Reemplazar los datos actuales con este archivo?')) { S = d; resetForm(); render(); toast('Importado'); } }
+  try { const d = JSON.parse(await f.text()); if (!valid(d)) throw 0; if (confirm('¿Reemplazar los datos actuales con este archivo?')) { S = norm(d); resetForm(); render(); toast('Importado'); } }
   catch { toast('Archivo no válido'); }
   e.target.value = '';
 });
-$('#reset').addEventListener('click', () => { if (confirm('¿Borrar todas las personas y gastos?')) { S = blank(); resetForm(); render(); } });
+$('#reset').addEventListener('click', () => { if (confirm('¿Borrar todas las personas y gastos?')) { S = norm(blank()); resetForm(); render(); } });
 
 (async function init(){
   const m = location.hash.match(/^#d=(.+)$/);
   if (m) {
     try {
       const d = await decode(m[1]);
-      if (valid(d) && (!S.expenses.length && !S.people.length || confirm(`Abriste el viaje "${d.name}". ¿Reemplazar lo que tienes guardado aquí?`))) { S = d; toast('Viaje cargado'); }
+      if (valid(d) && (!S.expenses.length && !S.people.length || confirm(`Abriste el viaje "${d.name}". ¿Reemplazar lo que tienes guardado aquí?`))) { S = norm(d); toast('Viaje cargado'); }
     } catch { toast('El enlace no es válido'); }
     history.replaceState(null, '', location.pathname + location.search);
   }
-  $('#date').value = today();
+  $('#date').value = today(); $('#payDate').value = today();
   render();
 })();
 </script>
