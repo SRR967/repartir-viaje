@@ -145,6 +145,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
     <h2>Gastos <span id="totalSpent" style="text-transform:none;letter-spacing:0"></span></h2>
     <div class="row filters">
       <select id="fPerson" aria-label="Filtrar por persona"><option value="">Todas las personas</option></select>
+      <select id="fWith" aria-label="Frente a otra persona"><option value="">Con todos</option></select>
       <select id="fKind" aria-label="Tipo de filtro">
         <option value="any">Pagó o participó</option>
         <option value="paid">Solo lo que pagó</option>
@@ -219,8 +220,9 @@ const blank = () => ({ name: 'Mi viaje', currency: 'COP', people: [], expenses: 
 const norm = d => { if (!Array.isArray(d.payments)) d.payments = []; return d; };
 let S = norm(load() || blank());
 let mode = 'equal', editing = null, draftAmong = null, draftShares = {};
-const filt = { person: '', kind: 'any' };
+const filt = { person: '', with: '', kind: 'any' };
 const filterPerson = () => S.people.some(p => p.id === filt.person) ? filt.person : '';
+const filterWith = () => { const fp = filterPerson(); return fp && filt.with !== fp && S.people.some(p => p.id === filt.with) ? filt.with : ''; };
 
 function load(){ try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
@@ -374,11 +376,33 @@ function renderExpenses(){
   // filter controls
   const fSel = $('#fPerson');
   fSel.innerHTML = '<option value="">Todas las personas</option>' + S.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
-  const fp = filterPerson(); fSel.value = fp; $('#fKind').value = filt.kind; $('#fKind').disabled = !fp;
+  const fp = filterPerson(), fw = filterWith(); fSel.value = fp;
+  const wSel = $('#fWith');
+  wSel.innerHTML = '<option value="">Con todos</option>' + S.people.filter(p => p.id !== fp).map(p => `<option value="${p.id}">Con ${esc(p.name)}</option>`).join('');
+  wSel.value = fw; wSel.disabled = !fp;
+  $('#fKind').value = filt.kind; $('#fKind').disabled = !fp; $('#fKind').hidden = !!fw;
   const paidBy = e => e.payer === fp, partOf = e => (sharesOf(e)[fp] || 0) > 0;
-  const list = !fp ? sorted : sorted.filter(e => filt.kind === 'paid' ? paidBy(e) : filt.kind === 'part' ? partOf(e) : paidBy(e) || partOf(e));
+  const shareOf = (e, id) => sharesOf(e)[id] || 0;
+  // pair view: expenses where one of the two paid for the other
+  const aForB = e => e.payer === fp && shareOf(e, fw) > 0, bForA = e => e.payer === fw && shareOf(e, fp) > 0;
+  const list = !fp ? sorted
+    : fw ? sorted.filter(e => aForB(e) || bForA(e))
+    : sorted.filter(e => filt.kind === 'paid' ? paidBy(e) : filt.kind === 'part' ? partOf(e) : paidBy(e) || partOf(e));
 
-  if (fp) {
+  if (fw) {
+    const A = esc(nameOf(fp)), B = esc(nameOf(fw));
+    const ab = list.filter(aForB).reduce((a, e) => a + shareOf(e, fw), 0), ba = list.filter(bForA).reduce((a, e) => a + shareOf(e, fp), 0);
+    const nAB = list.filter(aForB).length, nBA = list.filter(bForA).length;
+    const pay = (f, t) => S.payments.filter(x => x.from === f && x.to === t).reduce((a, x) => a + x.amount, 0);
+    const pAB = pay(fp, fw), pBA = pay(fw, fp);
+    const owes = round(ab - ba - pBA + pAB); // > 0: B owes A
+    $('#filterSummary').innerHTML = `<div class="fsum">
+      <span>${A} pagó por ${B}: <b>${fmt(ab)}</b> <span class="note">(${nAB} gasto${nAB === 1 ? '' : 's'})</span></span>
+      <span>${B} pagó por ${A}: <b>${fmt(ba)}</b> <span class="note">(${nBA} gasto${nBA === 1 ? '' : 's'})</span></span>
+      ${pAB || pBA ? `<span>Abonos: ${pBA ? `${B} → ${A} <b>${fmt(pBA)}</b>` : ''}${pAB && pBA ? ' · ' : ''}${pAB ? `${A} → ${B} <b>${fmt(pAB)}</b>` : ''}</span>` : ''}
+      <span style="flex-basis:100%">Deuda directa: <b class="${owes ? 'neg' : ''}">${owes > 0 ? `${B} le debe ${fmt(owes)} a ${A}` : owes < 0 ? `${A} le debe ${fmt(-owes)} a ${B}` : 'están a paz y salvo'}</b></span>
+      <span class="note" style="flex-basis:100%">Solo cuenta lo que pasó entre los dos. "Cómo saldar cuentas" puede combinar deudas de varios para hacer menos transferencias.</span></div>`;
+  } else if (fp) {
     const b = balances()[fp], n = round(b.net), nm = esc(nameOf(fp));
     const listPaid = list.filter(paidBy).reduce((a, e) => a + e.amount, 0), listShare = list.reduce((a, e) => a + (sharesOf(e)[fp] || 0), 0);
     $('#filterSummary').innerHTML = `<div class="fsum"><span>${nm} pagó <b>${fmt(listPaid)}</b></span><span>Su parte: <b>${fmt(listShare)}</b></span>
@@ -389,14 +413,15 @@ function renderExpenses(){
   $('#expenses').innerHTML = list.length ? list.map(e => {
     const sh = sharesOf(e), ids = Object.keys(sh);
     const who = e.mode === 'custom' ? 'por consumo' : (ids.length === S.people.length ? 'entre todos' : 'entre ' + ids.map(nameOf).join(', '));
-    const mine = fp ? `<div class="mine">${paidBy(e) ? 'Lo pagó' + (sh[fp] ? ' · ' : '') : ''}${sh[fp] ? 'Su parte: ' + fmt(sh[fp]) : ''}</div>` : '';
+    const mine = fw ? `<div class="mine">${esc(nameOf(e.payer))} pagó la parte de ${esc(nameOf(e.payer === fp ? fw : fp))}: ${fmt(sh[e.payer === fp ? fw : fp])}</div>`
+      : fp ? `<div class="mine">${paidBy(e) ? 'Lo pagó' + (sh[fp] ? ' · ' : '') : ''}${sh[fp] ? 'Su parte: ' + fmt(sh[fp]) : ''}</div>` : '';
     const det = [];
     if (e.amountParts && e.amountParts.length > 1) det.push(`<div>Total: ${partsText(e.amountParts)} = <b>${fmt(e.amount)}</b></div>`);
     if (e.mode === 'custom') ids.forEach(id => {
       const ps = e.shareParts && e.shareParts[id];
       det.push(`<div>${esc(nameOf(id))}: ${ps && ps.length > 1 ? partsText(ps) + ' = ' : ''}<b>${fmt(sh[id])}</b></div>`);
     });
-    const detail = det.length ? `<details class="det"${fp ? ' open' : ''}><summary>Ver detalle</summary>${det.join('')}</details>` : '';
+    const detail = det.length ? `<details class="det"${fp && !fw ? ' open' : ''}><summary>Ver detalle</summary>${det.join('')}</details>` : '';
     return `<div class="exp${editing === e.id ? ' editing' : ''}"><div class="main" data-edit="${e.id}"><div class="t">${esc(e.desc || 'Gasto')}</div>
       <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div>${mine}${detail}</div>
       <div class="side"><div class="amt">${fmt(e.amount)}</div>
@@ -412,8 +437,8 @@ function renderPayments(){
   });
   if (S.people.length > 1 && $('#payTo').value === $('#payFrom').value) $('#payTo').value = S.people.find(p => p.id !== $('#payFrom').value).id;
   $('#payForm').querySelectorAll('input,select,button').forEach(el => el.disabled = S.people.length < 2);
-  const fp = filterPerson();
-  const list = S.payments.filter(x => !fp || x.from === fp || x.to === fp).map((x, i) => [x, i]).sort((a, b) => (b[0].date || '').localeCompare(a[0].date || '') || b[1] - a[1]).map(x => x[0]);
+  const fp = filterPerson(), fw = filterWith();
+  const list = S.payments.filter(x => !fp || (fw ? (x.from === fp && x.to === fw) || (x.from === fw && x.to === fp) : x.from === fp || x.to === fp)).map((x, i) => [x, i]).sort((a, b) => (b[0].date || '').localeCompare(a[0].date || '') || b[1] - a[1]).map(x => x[0]);
   $('#payments').innerHTML = list.length ? list.map(x => `<div class="exp"><div class="main" style="cursor:default">
       <div class="t">${esc(nameOf(x.from))} → ${esc(nameOf(x.to))}</div><div class="s">${esc(fmtDay(x.date))} · ${x.note ? esc(x.note) : 'abono'}</div></div>
       <div class="amt">${fmt(x.amount)}</div><button class="ghost" data-del-pay="${x.id}" title="Eliminar">×</button></div>`).join('')
@@ -545,6 +570,7 @@ $('#expForm').addEventListener('submit', e => {
 
 $('#fPerson').addEventListener('change', e => { filt.person = e.target.value; renderExpenses(); renderPayments(); });
 $('#fKind').addEventListener('change', e => { filt.kind = e.target.value; renderExpenses(); });
+$('#fWith').addEventListener('change', e => { filt.with = e.target.value; renderExpenses(); renderPayments(); });
 
 $('#payForm').addEventListener('submit', e => {
   e.preventDefault();
