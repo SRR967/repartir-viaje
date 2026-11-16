@@ -61,6 +61,9 @@ details.det div{font-size:13px;color:var(--muted)}details.det b{color:var(--ink)
 .modal p{margin:0 0 14px}
 .modal textarea{width:100%;min-height:110px;margin-bottom:12px;font:13px/1.4 ui-monospace,Menlo,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px;resize:vertical}
 button.danger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600}
+.exp .side{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.exp .acts{display:flex;align-items:center;gap:2px}
+.exp.editing{background:var(--accent-soft);border-radius:10px;padding-left:8px;padding-right:4px}
 .filters{margin-bottom:10px}.filters select{flex:1;min-width:150px}
 .fsum{display:flex;flex-wrap:wrap;gap:6px 16px;background:var(--accent-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
 .fsum b{white-space:nowrap}
@@ -394,9 +397,10 @@ function renderExpenses(){
       det.push(`<div>${esc(nameOf(id))}: ${ps && ps.length > 1 ? partsText(ps) + ' = ' : ''}<b>${fmt(sh[id])}</b></div>`);
     });
     const detail = det.length ? `<details class="det"${fp ? ' open' : ''}><summary>Ver detalle</summary>${det.join('')}</details>` : '';
-    return `<div class="exp"><div class="main" data-edit="${e.id}"><div class="t">${esc(e.desc || 'Gasto')}</div>
+    return `<div class="exp${editing === e.id ? ' editing' : ''}"><div class="main" data-edit="${e.id}"><div class="t">${esc(e.desc || 'Gasto')}</div>
       <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div>${mine}${detail}</div>
-      <div class="amt">${fmt(e.amount)}</div><button class="ghost" data-del-exp="${e.id}" title="Eliminar">×</button></div>`;
+      <div class="side"><div class="amt">${fmt(e.amount)}</div>
+        <div class="acts"><button type="button" class="small" data-edit-btn="${e.id}">Editar</button><button type="button" class="ghost" data-del-exp="${e.id}" title="Eliminar" aria-label="Eliminar">×</button></div></div></div>`;
   }).join('') : `<div class="empty">${S.expenses.length ? 'No hay gastos con este filtro.' : 'Aún no hay gastos.'}</div>`;
 }
 
@@ -456,6 +460,8 @@ document.addEventListener('click', e => {
     S.expenses.forEach(x => { x.among = (x.among || []).filter(a => a !== id); if (x.shares) delete x.shares[id]; });
     if (draftAmong) draftAmong = draftAmong.filter(a => a !== id);
     render();
+  } else if (t.dataset.editBtn) {
+    startEdit(t.dataset.editBtn);
   } else if (t.dataset.plus !== undefined) {
     const inp = t.previousElementSibling;
     if (inp.value.trim() && !/\+\s*$/.test(inp.value)) inp.value = inp.value.trim() + ' + ';
@@ -558,7 +564,8 @@ function startEdit(id){
   draftShares = {}; if (ex.shares) for (const k in ex.shares) draftShares[k] = ex.shareParts && ex.shareParts[k] ? partsText(ex.shareParts[k]) : fmtInput(ex.shares[k]);
   updateAmountHint();
   $('#formTitle').textContent = 'Editar gasto'; $('#saveExp').textContent = 'Guardar cambios'; $('#cancelEdit').hidden = false;
-  renderForm(); $('#payer').value = ex.payer;
+  renderForm(); $('#payer').value = ex.payer; renderExpenses();
+  $('#formTitle').textContent = `Editando: ${ex.desc || 'Gasto'}`;
   $('#expenseCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function resetForm(){
@@ -566,7 +573,7 @@ function resetForm(){
   $('#desc').value = ''; $('#amount').value = ''; $('#date').value = today(); $('#amountHint').textContent = '';
   $('#formTitle').textContent = 'Nuevo gasto'; $('#saveExp').textContent = 'Agregar gasto'; $('#cancelEdit').hidden = true;
 }
-$('#cancelEdit').addEventListener('click', () => { resetForm(); renderForm(); });
+$('#cancelEdit').addEventListener('click', () => { resetForm(); renderForm(); renderExpenses(); });
 
 /* ---------- share / backup ---------- */
 const b64 = u => { let s = ''; u.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
