@@ -75,6 +75,8 @@ button.danger{background:var(--danger);border-color:var(--danger);color:#fff;fon
 .bar:hover .nm{text-decoration:underline}
 .bar .v{text-align:right;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:14px}
 .bar .v small{display:block;color:var(--muted);font-weight:400;font-size:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.subh{font-size:14px;font-weight:600;margin:16px 0 0}
 .filters{margin-bottom:10px}.filters select{flex:1;min-width:150px}
 .fsum{display:flex;flex-wrap:wrap;gap:6px 16px;background:var(--accent-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
 .fsum b{white-space:nowrap}
@@ -105,7 +107,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
 .toast.show{opacity:1}
 .scroll{overflow-x:auto}
-@media (max-width:520px){.grid2{grid-template-columns:1fr}  th,td{padding:8px 3px;font-size:13px}.card{padding:14px 12px}
+@media (max-width:520px){.grid2,.grid3{grid-template-columns:1fr}  th,td{padding:8px 3px;font-size:13px}.card{padding:14px 12px}
   table.wide th,table.wide td{font-size:12px;padding:8px 2px;letter-spacing:-.01em}}
 </style>
 </head>
@@ -137,7 +139,8 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
           <div class="note" id="amountHint"></div>
         </div>
       </div>
-      <div class="grid2">
+      <div class="grid3">
+        <label class="field"><span>Categoría</span><select id="cat"></select></label>
         <label class="field"><span>¿Quién pagó?</span><select id="payer"></select></label>
         <label class="field"><span>Fecha</span><input type="date" id="date"></label>
       </div>
@@ -157,6 +160,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
     <div class="row filters">
       <select id="fPerson" aria-label="Filtrar por persona"><option value="">Todas las personas</option></select>
       <select id="fWith" aria-label="Frente a otra persona"><option value="">Con todos</option></select>
+      <select id="fCat" aria-label="Filtrar por categoría"></select>
       <select id="fKind" aria-label="Tipo de filtro">
         <option value="any">Pagó o participó</option>
         <option value="paid">Solo lo que pagó</option>
@@ -179,6 +183,16 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
     </div>
     <div id="chart" class="chart" role="list"></div>
     <div class="note" id="chartNote"></div>
+  </section>
+
+  <section class="card" id="statsCard">
+    <h2>¿En qué y cuándo se gastó?</h2>
+    <select id="statsWho" aria-label="De quién"></select>
+    <div class="subh">Por categoría</div>
+    <div id="catChart" class="chart" role="list"></div>
+    <div class="subh">Por día</div>
+    <div id="dayChart" class="chart" role="list"></div>
+    <div class="note" id="statsNote"></div>
   </section>
 
   <section class="card">
@@ -240,8 +254,8 @@ const blank = () => ({ name: 'Mi viaje', currency: 'COP', people: [], expenses: 
 const norm = d => { if (!Array.isArray(d.payments)) d.payments = []; return d; };
 let S = norm(load() || blank());
 let mode = 'equal', editing = null, draftAmong = null, draftShares = {};
-const filt = { person: '', with: '', kind: 'any' };
-let chartMode = 'owed';
+const filt = { person: '', with: '', kind: 'any', cat: '' };
+let chartMode = 'owed', statsWho = '';
 const filterPerson = () => S.people.some(p => p.id === filt.person) ? filt.person : '';
 const filterWith = () => { const fp = filterPerson(); return fp && filt.with !== fp && S.people.some(p => p.id === filt.with) ? filt.with : ''; };
 
@@ -250,6 +264,22 @@ function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} 
 const dec = () => ['COP','CLP','JPY','PYG'].includes(S.currency) ? 0 : 2;
 const round = n => { const f = 10 ** dec(); return Math.round(n * f) / f; };
 const fmt = n => new Intl.NumberFormat('es-CO', { style:'currency', currency:S.currency, maximumFractionDigits:dec(), minimumFractionDigits:0 }).format(round(n) || 0);
+/* Categories: stored as e.cat; older expenses get one guessed from their description. */
+const CATS = [['alojamiento','🏠','Alojamiento'], ['comida','🍽️','Comida y bebida'], ['actividades','🎢','Actividades'],
+  ['transporte','🚗','Transporte'], ['compras','🛍️','Compras'], ['otros','📦','Otros']];
+const CAT = Object.fromEntries(CATS.map(([k, e, n]) => [k, { e, n }]));
+const plain = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const CAT_RULES = [
+  ['alojamiento', /airbnb|hotel|hostal|hospedaje|cabana|finca|glamping|habitacion|aloja|booking/],
+  ['actividades', /entrada|termal|cuatrimoto|tour|museo|parque(?!a)|piscina|caminata|paseo|rafting|cabalgata|parapente|boleta|concierto|discoteca|juego/],
+  ['transporte', /uber|taxi|didi|cabify|indrive|gasolina|tanqueo|peaje|parqueadero|parqueo|bus|tiquete|vuelo|avion|transporte|lancha|metro/],
+  ['comida', /almuerzo|desayuno|cena|comida|restaurante|mercado|milhoja|helado|cafe|pan\b|panaderia|pizza|hamburguesa|cerveza|smirnof|ron\b|aguardiente|licor|trago|bebida|snack|onces|postre|arepa|empanada|fruta|agua|gaseosa|mecato|vino/],
+  ['compras', /souvenir|artesania|regalo|ropa|tienda|compra|recuerdo/],
+];
+const guessCat = desc => { const d = plain(desc); const r = CAT_RULES.find(([, re]) => re.test(d)); return r ? r[0] : 'otros'; };
+const catOf = e => CAT[e.cat] ? e.cat : guessCat(e.desc);
+let catTouched = false;
+
 const isoDay = d => { d = new Date(d); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
 const today = () => isoDay(Date.now());
 const dayOf = e => typeof e.date === 'number' ? isoDay(e.date) : (e.date || '');
@@ -341,7 +371,7 @@ function render(){
   $('#people').innerHTML = S.people.length
     ? S.people.map(p => `<span class="chip">${esc(p.name)}<button data-del-person="${p.id}" title="Quitar">×</button></span>`).join('')
     : '<div class="empty">Agrega a los que van en el viaje.</div>';
-  renderForm(); renderExpenses(); renderPayments(); renderSummary(); renderChart(); save();
+  renderForm(); renderExpenses(); renderPayments(); renderSummary(); renderChart(); renderStats(); save();
 }
 
 function renderForm(){
@@ -406,9 +436,11 @@ function renderExpenses(){
   const shareOf = (e, id) => sharesOf(e)[id] || 0;
   // pair view: expenses where one of the two paid for the other
   const aForB = e => e.payer === fp && shareOf(e, fw) > 0, bForA = e => e.payer === fw && shareOf(e, fp) > 0;
-  const list = !fp ? sorted
-    : fw ? sorted.filter(e => aForB(e) || bForA(e))
-    : sorted.filter(e => filt.kind === 'paid' ? paidBy(e) : filt.kind === 'part' ? partOf(e) : paidBy(e) || partOf(e));
+  const fc = CAT[filt.cat] ? filt.cat : ''; $('#fCat').value = fc;
+  const pool = fc ? sorted.filter(e => catOf(e) === fc) : sorted;
+  const list = !fp ? pool
+    : fw ? pool.filter(e => aForB(e) || bForA(e))
+    : pool.filter(e => filt.kind === 'paid' ? paidBy(e) : filt.kind === 'part' ? partOf(e) : paidBy(e) || partOf(e));
 
   if (fw) {
     const A = esc(nameOf(fp)), B = esc(nameOf(fw));
@@ -420,15 +452,19 @@ function renderExpenses(){
     $('#filterSummary').innerHTML = `<div class="fsum">
       <span>${A} pagó por ${B}: <b>${fmt(ab)}</b> <span class="note">(${nAB} gasto${nAB === 1 ? '' : 's'})</span></span>
       <span>${B} pagó por ${A}: <b>${fmt(ba)}</b> <span class="note">(${nBA} gasto${nBA === 1 ? '' : 's'})</span></span>
-      ${pAB || pBA ? `<span>Abonos: ${pBA ? `${B} → ${A} <b>${fmt(pBA)}</b>` : ''}${pAB && pBA ? ' · ' : ''}${pAB ? `${A} → ${B} <b>${fmt(pAB)}</b>` : ''}</span>` : ''}
+      ${fc ? `<span class="note" style="flex-basis:100%">Solo ${esc(CAT[fc].n.toLowerCase())}. Quita el filtro de categoría para ver la deuda directa completa.</span>` : `${pAB || pBA ? `<span>Abonos: ${pBA ? `${B} → ${A} <b>${fmt(pBA)}</b>` : ''}${pAB && pBA ? ' · ' : ''}${pAB ? `${A} → ${B} <b>${fmt(pAB)}</b>` : ''}</span>` : ''}
       <span style="flex-basis:100%">Deuda directa: <b class="${owes ? 'neg' : ''}">${owes > 0 ? `${B} le debe ${fmt(owes)} a ${A}` : owes < 0 ? `${A} le debe ${fmt(-owes)} a ${B}` : 'están a paz y salvo'}</b></span>
-      <span class="note" style="flex-basis:100%">Solo cuenta lo que pasó entre los dos. "Cómo saldar cuentas" puede combinar deudas de varios para hacer menos transferencias.</span></div>`;
+      <span class="note" style="flex-basis:100%">Solo cuenta lo que pasó entre los dos. "Cómo saldar cuentas" puede combinar deudas de varios para hacer menos transferencias.</span>`}</div>`;
   } else if (fp) {
     const b = balances()[fp], n = round(b.net), nm = esc(nameOf(fp));
     const listPaid = list.filter(paidBy).reduce((a, e) => a + e.amount, 0), listShare = list.reduce((a, e) => a + (sharesOf(e)[fp] || 0), 0);
     $('#filterSummary').innerHTML = `<div class="fsum"><span>${nm} pagó <b>${fmt(listPaid)}</b></span><span>Su parte: <b>${fmt(listShare)}</b></span>
       <span>Balance total: <b class="${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n > 0 ? '+' : ''}${fmt(n)}</b></span>
       <span class="note" style="flex-basis:100%">${list.length} gasto${list.length === 1 ? '' : 's'} · ${n > 0 ? 'le deben plata' : n < 0 ? 'debe plata' : 'a paz y salvo'}</span></div>`;
+  } else if (fc) {
+    const tot = list.reduce((a, e) => a + e.amount, 0), all = S.expenses.reduce((a, e) => a + e.amount, 0);
+    $('#filterSummary').innerHTML = `<div class="fsum"><span>${CAT[fc].e} ${esc(CAT[fc].n)}: <b>${fmt(tot)}</b></span>
+      <span class="note">${list.length} gasto${list.length === 1 ? '' : 's'} · ${all ? Math.round(tot / all * 100) : 0}% del total</span></div>`;
   } else $('#filterSummary').innerHTML = '';
 
   $('#expenses').innerHTML = list.length ? list.map(e => {
@@ -443,7 +479,7 @@ function renderExpenses(){
       det.push(`<div>${esc(nameOf(id))}: ${ps && ps.length > 1 ? partsText(ps) + ' = ' : ''}<b>${fmt(sh[id])}</b></div>`);
     });
     const detail = det.length ? `<details class="det"${fp && !fw ? ' open' : ''}><summary>Ver detalle</summary>${det.join('')}</details>` : '';
-    return `<div class="exp${editing === e.id ? ' editing' : ''}"><div class="main" data-edit="${e.id}"><div class="t">${esc(e.desc || 'Gasto')}</div>
+    return `<div class="exp${editing === e.id ? ' editing' : ''}"><div class="main" data-edit="${e.id}"><div class="t"><span title="${CAT[catOf(e)].n}">${CAT[catOf(e)].e}</span> ${esc(e.desc || 'Gasto')}</div>
       <div class="s">${dayOf(e) ? esc(fmtDay(dayOf(e))) + ' · ' : ''}Pagó ${esc(nameOf(e.payer))} · ${esc(who)}</div>${mine}${detail}</div>
       <div class="side"><div class="amt">${fmt(e.amount)}</div>
         <div class="acts"><button type="button" class="small" data-edit-btn="${e.id}">Editar</button><button type="button" class="ghost" data-del-exp="${e.id}" title="Eliminar" aria-label="Eliminar">×</button></div></div></div>`;
@@ -485,6 +521,37 @@ function renderChart(){
   $('#chartNote').textContent = key === 'owed'
     ? `Lo que le tocó a cada uno, sin importar quién pagó. Promedio: ${fmt(avg)} por persona. Toca un nombre para ver sus gastos.`
     : `Lo que salió del bolsillo de cada uno (sin contar abonos). Toca un nombre para ver sus gastos.`;
+}
+/* Category (ranked) and day (chronological) bars, for the group or one person's share. */
+function renderStats(){
+  const sel = $('#statsWho');
+  sel.innerHTML = '<option value="">Todo el grupo</option>' + S.people.map(p => `<option value="${p.id}">Solo ${esc(p.name)}</option>`).join('');
+  const who = S.people.some(p => p.id === statsWho) ? statsWho : ''; sel.value = who;
+  const valOf = e => who ? (sharesOf(e)[who] || 0) : e.amount;
+  const byCat = {}, byDay = {};
+  S.expenses.forEach(e => {
+    const v = valOf(e); if (!v) return;
+    byCat[catOf(e)] = (byCat[catOf(e)] || 0) + v;
+    const d = dayOf(e) || 'sin fecha'; byDay[d] = (byDay[d] || 0) + v;
+  });
+  const total = Object.values(byCat).reduce((a, v) => a + v, 0);
+  if (!total) { $('#catChart').innerHTML = $('#dayChart').innerHTML = ''; $('#statsNote').textContent = 'Cuando agregues gastos verás aquí en qué y cuándo se gastó.'; return; }
+  const bars = (rows, attr) => { const max = Math.max(...rows.map(r => r.v)); return rows.map(r => {
+    const pct = Math.round(r.v / total * 100);
+    return `<div class="bar" role="listitem" tabindex="${attr ? 0 : -1}" ${attr ? `data-catbar="${r.k}"` : 'style="cursor:default"'} title="${esc(r.label)}: ${fmt(r.v)} (${pct}%)">
+      <span class="nm">${r.label}</span>
+      <span class="track"><span class="fill" style="width:${Math.max(r.v / max * 100, 1)}%"></span></span>
+      <span class="v">${fmt(r.v)}<small>${pct}%</small></span></div>`; }).join(''); };
+  $('#catChart').innerHTML = bars(Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ k, v, label: `${CAT[k].e} ${esc(CAT[k].n)}` })), true);
+  const days = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
+  $('#dayChart').innerHTML = bars(days.map(([k, v]) => ({ k, v, label: esc(k === 'sin fecha' ? k : fmtDay(k)) })), false);
+  $('#statsNote').textContent = `${who ? `Parte de ${nameOf(who)}` : 'Todo el grupo'}: ${fmt(total)} · ${days.length} día${days.length === 1 ? '' : 's'}, promedio ${fmt(total / days.length)} por día. Toca una categoría para ver sus gastos.`;
+}
+function openCatExpenses(c){
+  filt.cat = c;
+  if (statsWho) { filt.person = statsWho; filt.with = ''; filt.kind = 'part'; } else { filt.person = ''; filt.with = ''; }
+  renderExpenses(); renderPayments();
+  $('#fPerson').closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function openPersonExpenses(id){
   filt.person = id; filt.with = ''; filt.kind = chartMode === 'owed' ? 'part' : 'paid';
@@ -534,6 +601,8 @@ document.addEventListener('click', e => {
     render();
   } else if (t.dataset.chart) {
     chartMode = t.dataset.chart; renderChart();
+  } else if (t.closest('[data-catbar]')) {
+    openCatExpenses(t.closest('[data-catbar]').dataset.catbar);
   } else if (t.closest('[data-bar]')) {
     openPersonExpenses(t.closest('[data-bar]').dataset.bar);
   } else if (t.dataset.editBtn) {
@@ -598,7 +667,7 @@ $('#expForm').addEventListener('submit', e => {
   const amount = round(parseAmount($('#amount').value));
   if (!(amount > 0)) return toast('Escribe un valor mayor a 0');
   const aParts = partsOf($('#amount').value);
-  const base = { desc: $('#desc').value.trim(), amount, payer: $('#payer').value, mode, date: $('#date').value || today(), amountParts: aParts.length > 1 ? aParts : null, shareParts: null };
+  const base = { desc: $('#desc').value.trim(), cat: $('#cat').value || guessCat($('#desc').value), amount, payer: $('#payer').value, mode, date: $('#date').value || today(), amountParts: aParts.length > 1 ? aParts : null, shareParts: null };
   if (mode === 'equal') {
     const among = draftAmong.filter(id => S.people.some(p => p.id === id));
     if (!among.length) return toast('Selecciona quiénes participan');
@@ -621,10 +690,18 @@ $('#expForm').addEventListener('submit', e => {
 
 $('#fPerson').addEventListener('change', e => { filt.person = e.target.value; renderExpenses(); renderPayments(); });
 $('#fKind').addEventListener('change', e => { filt.kind = e.target.value; renderExpenses(); });
-$('#chart').addEventListener('keydown', e => {
-  const bar = e.target.closest('[data-bar]');
-  if (bar && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPersonExpenses(bar.dataset.bar); }
+document.addEventListener('keydown', e => {
+  const bar = e.target.closest && e.target.closest('[data-bar],[data-catbar]');
+  if (bar && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); bar.querySelector('.nm').click(); }
 });
+// category select: options + suggestion from the description until the user picks one
+const catOptions = CATS.map(([k, e, n]) => `<option value="${k}">${e} ${n}</option>`).join('');
+$('#cat').innerHTML = catOptions; $('#cat').value = 'otros';
+$('#fCat').innerHTML = '<option value="">Todas las categorías</option>' + catOptions;
+$('#desc').addEventListener('input', () => { if (!catTouched) $('#cat').value = guessCat($('#desc').value); });
+$('#cat').addEventListener('change', () => { catTouched = true; });
+$('#fCat').addEventListener('change', e => { filt.cat = e.target.value; renderExpenses(); });
+$('#statsWho').addEventListener('change', e => { statsWho = e.target.value; renderStats(); });
 $('#fWith').addEventListener('change', e => { filt.with = e.target.value; renderExpenses(); renderPayments(); });
 
 $('#payForm').addEventListener('submit', e => {
@@ -644,6 +721,7 @@ function startEdit(id){
   draftAmong = ex.mode === 'equal' ? [...ex.among] : S.people.map(p => p.id);
   draftShares = {}; if (ex.shares) for (const k in ex.shares) draftShares[k] = ex.shareParts && ex.shareParts[k] ? partsText(ex.shareParts[k]) : fmtInput(ex.shares[k]);
   updateAmountHint();
+  $('#cat').value = catOf(ex); catTouched = true;
   $('#formTitle').textContent = 'Editar gasto'; $('#saveExp').textContent = 'Guardar cambios'; $('#cancelEdit').hidden = false;
   renderForm(); $('#payer').value = ex.payer; renderExpenses();
   $('#formTitle').textContent = `Editando: ${ex.desc || 'Gasto'}`;
@@ -652,6 +730,7 @@ function startEdit(id){
 function resetForm(){
   editing = null; draftAmong = null; draftShares = {};
   $('#desc').value = ''; $('#amount').value = ''; $('#date').value = today(); $('#amountHint').textContent = '';
+  $('#cat').value = 'otros'; catTouched = false;
   $('#formTitle').textContent = 'Nuevo gasto'; $('#saveExp').textContent = 'Agregar gasto'; $('#cancelEdit').hidden = true;
 }
 $('#cancelEdit').addEventListener('click', () => { resetForm(); renderForm(); renderExpenses(); });
@@ -714,6 +793,8 @@ $('#copyText').addEventListener('click', () => {
   const b = balances(), t = settle(b), total = S.expenses.reduce((a, e) => a + e.amount, 0);
   const lines = [`*${S.name}* — total ${fmt(total)}`, '', ...S.people.map(p => `• ${p.name}: pagó ${fmt(b[p.id].paid)}, consumió ${fmt(b[p.id].owed)}`),
     ...(S.payments.length ? ['', '*Abonos:*', ...S.payments.map(x => `• ${nameOf(x.from)} → ${nameOf(x.to)}: ${fmt(x.amount)}${x.note ? ' (' + x.note + ')' : ''}`)] : []),
+    '', '*En qué se gastó:*', ...(() => { const c = {}; S.expenses.forEach(e => c[catOf(e)] = (c[catOf(e)] || 0) + e.amount);
+      return Object.entries(c).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${CAT[k].e} ${CAT[k].n}: ${fmt(v)} (${Math.round(v / total * 100)}%)`); })(),
     '', '*Para quedar a paz y salvo:*',
     ...(t.length ? t.map(x => `→ ${nameOf(x.from)} le paga ${fmt(x.amt)} a ${nameOf(x.to)}`) : ['Nadie le debe a nadie 🎉'])];
   copy(lines.join('\n'), 'Resumen copiado');
