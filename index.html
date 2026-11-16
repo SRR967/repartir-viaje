@@ -161,6 +161,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
       <select id="fPerson" aria-label="Filtrar por persona"><option value="">Todas las personas</option></select>
       <select id="fWith" aria-label="Frente a otra persona"><option value="">Con todos</option></select>
       <select id="fCat" aria-label="Filtrar por categoría"></select>
+      <select id="fDay" aria-label="Filtrar por día"><option value="">Todos los días</option></select>
       <select id="fKind" aria-label="Tipo de filtro">
         <option value="any">Pagó o participó</option>
         <option value="paid">Solo lo que pagó</option>
@@ -254,7 +255,7 @@ const blank = () => ({ name: 'Mi viaje', currency: 'COP', people: [], expenses: 
 const norm = d => { if (!Array.isArray(d.payments)) d.payments = []; return d; };
 let S = norm(load() || blank());
 let mode = 'equal', editing = null, draftAmong = null, draftShares = {};
-const filt = { person: '', with: '', kind: 'any', cat: '' };
+const filt = { person: '', with: '', kind: 'any', cat: '', day: '' };
 let chartMode = 'owed', statsWho = '';
 const filterPerson = () => S.people.some(p => p.id === filt.person) ? filt.person : '';
 const filterWith = () => { const fp = filterPerson(); return fp && filt.with !== fp && S.people.some(p => p.id === filt.with) ? filt.with : ''; };
@@ -437,7 +438,10 @@ function renderExpenses(){
   // pair view: expenses where one of the two paid for the other
   const aForB = e => e.payer === fp && shareOf(e, fw) > 0, bForA = e => e.payer === fw && shareOf(e, fp) > 0;
   const fc = CAT[filt.cat] ? filt.cat : ''; $('#fCat').value = fc;
-  const pool = fc ? sorted.filter(e => catOf(e) === fc) : sorted;
+  const allDays = [...new Set(S.expenses.map(e => dayOf(e) || 'sin fecha'))].sort();
+  $('#fDay').innerHTML = '<option value="">Todos los días</option>' + allDays.map(d => `<option value="${d}">${esc(d === 'sin fecha' ? 'Sin fecha' : fmtDay(d))}</option>`).join('');
+  const fd = allDays.includes(filt.day) ? filt.day : ''; $('#fDay').value = fd;
+  const pool = sorted.filter(e => (!fc || catOf(e) === fc) && (!fd || (dayOf(e) || 'sin fecha') === fd));
   const list = !fp ? pool
     : fw ? pool.filter(e => aForB(e) || bForA(e))
     : pool.filter(e => filt.kind === 'paid' ? paidBy(e) : filt.kind === 'part' ? partOf(e) : paidBy(e) || partOf(e));
@@ -452,7 +456,7 @@ function renderExpenses(){
     $('#filterSummary').innerHTML = `<div class="fsum">
       <span>${A} pagó por ${B}: <b>${fmt(ab)}</b> <span class="note">(${nAB} gasto${nAB === 1 ? '' : 's'})</span></span>
       <span>${B} pagó por ${A}: <b>${fmt(ba)}</b> <span class="note">(${nBA} gasto${nBA === 1 ? '' : 's'})</span></span>
-      ${fc ? `<span class="note" style="flex-basis:100%">Solo ${esc(CAT[fc].n.toLowerCase())}. Quita el filtro de categoría para ver la deuda directa completa.</span>` : `${pAB || pBA ? `<span>Abonos: ${pBA ? `${B} → ${A} <b>${fmt(pBA)}</b>` : ''}${pAB && pBA ? ' · ' : ''}${pAB ? `${A} → ${B} <b>${fmt(pAB)}</b>` : ''}</span>` : ''}
+      ${fc || fd ? `<span class="note" style="flex-basis:100%">Solo ${[fc && esc(CAT[fc].n.toLowerCase()), fd && esc(fmtDay(fd))].filter(Boolean).join(', ')}. Quita esos filtros para ver la deuda directa completa.</span>` : `${pAB || pBA ? `<span>Abonos: ${pBA ? `${B} → ${A} <b>${fmt(pBA)}</b>` : ''}${pAB && pBA ? ' · ' : ''}${pAB ? `${A} → ${B} <b>${fmt(pAB)}</b>` : ''}</span>` : ''}
       <span style="flex-basis:100%">Deuda directa: <b class="${owes ? 'neg' : ''}">${owes > 0 ? `${B} le debe ${fmt(owes)} a ${A}` : owes < 0 ? `${A} le debe ${fmt(-owes)} a ${B}` : 'están a paz y salvo'}</b></span>
       <span class="note" style="flex-basis:100%">Solo cuenta lo que pasó entre los dos. "Cómo saldar cuentas" puede combinar deudas de varios para hacer menos transferencias.</span>`}</div>`;
   } else if (fp) {
@@ -461,9 +465,10 @@ function renderExpenses(){
     $('#filterSummary').innerHTML = `<div class="fsum"><span>${nm} pagó <b>${fmt(listPaid)}</b></span><span>Su parte: <b>${fmt(listShare)}</b></span>
       <span>Balance total: <b class="${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n > 0 ? '+' : ''}${fmt(n)}</b></span>
       <span class="note" style="flex-basis:100%">${list.length} gasto${list.length === 1 ? '' : 's'} · ${n > 0 ? 'le deben plata' : n < 0 ? 'debe plata' : 'a paz y salvo'}</span></div>`;
-  } else if (fc) {
+  } else if (fc || fd) {
     const tot = list.reduce((a, e) => a + e.amount, 0), all = S.expenses.reduce((a, e) => a + e.amount, 0);
-    $('#filterSummary').innerHTML = `<div class="fsum"><span>${CAT[fc].e} ${esc(CAT[fc].n)}: <b>${fmt(tot)}</b></span>
+    const label = [fc && `${CAT[fc].e} ${esc(CAT[fc].n)}`, fd && `📅 ${esc(fd === 'sin fecha' ? 'Sin fecha' : fmtDay(fd))}`].filter(Boolean).join(' · ');
+    $('#filterSummary').innerHTML = `<div class="fsum"><span>${label}: <b>${fmt(tot)}</b></span>
       <span class="note">${list.length} gasto${list.length === 1 ? '' : 's'} · ${all ? Math.round(tot / all * 100) : 0}% del total</span></div>`;
   } else $('#filterSummary').innerHTML = '';
 
@@ -538,17 +543,18 @@ function renderStats(){
   if (!total) { $('#catChart').innerHTML = $('#dayChart').innerHTML = ''; $('#statsNote').textContent = 'Cuando agregues gastos verás aquí en qué y cuándo se gastó.'; return; }
   const bars = (rows, attr) => { const max = Math.max(...rows.map(r => r.v)); return rows.map(r => {
     const pct = Math.round(r.v / total * 100);
-    return `<div class="bar" role="listitem" tabindex="${attr ? 0 : -1}" ${attr ? `data-catbar="${r.k}"` : 'style="cursor:default"'} title="${esc(r.label)}: ${fmt(r.v)} (${pct}%)">
+    return `<div class="bar" role="listitem" tabindex="0" ${attr}="${r.k}" title="${fmt(r.v)} (${pct}%)">
       <span class="nm">${r.label}</span>
       <span class="track"><span class="fill" style="width:${Math.max(r.v / max * 100, 1)}%"></span></span>
       <span class="v">${fmt(r.v)}<small>${pct}%</small></span></div>`; }).join(''); };
-  $('#catChart').innerHTML = bars(Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ k, v, label: `${CAT[k].e} ${esc(CAT[k].n)}` })), true);
+  $('#catChart').innerHTML = bars(Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ k, v, label: `${CAT[k].e} ${esc(CAT[k].n)}` })), 'data-catbar');
   const days = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
-  $('#dayChart').innerHTML = bars(days.map(([k, v]) => ({ k, v, label: esc(k === 'sin fecha' ? k : fmtDay(k)) })), false);
-  $('#statsNote').textContent = `${who ? `Parte de ${nameOf(who)}` : 'Todo el grupo'}: ${fmt(total)} · ${days.length} día${days.length === 1 ? '' : 's'}, promedio ${fmt(total / days.length)} por día. Toca una categoría para ver sus gastos.`;
+  $('#dayChart').innerHTML = bars(days.map(([k, v]) => ({ k, v, label: esc(k === 'sin fecha' ? 'Sin fecha' : fmtDay(k)) })), 'data-daybar');
+  $('#statsNote').textContent = `${who ? `Parte de ${nameOf(who)}` : 'Todo el grupo'}: ${fmt(total)} · ${days.length} día${days.length === 1 ? '' : 's'}, promedio ${fmt(total / days.length)} por día. Toca una categoría o un día para ver sus gastos.`;
 }
-function openCatExpenses(c){
-  filt.cat = c;
+function openDayExpenses(d){ filt.day = d; filt.cat = ''; openStatsFilter(); }
+function openCatExpenses(c){ filt.cat = c; filt.day = ''; openStatsFilter(); }
+function openStatsFilter(){
   if (statsWho) { filt.person = statsWho; filt.with = ''; filt.kind = 'part'; } else { filt.person = ''; filt.with = ''; }
   renderExpenses(); renderPayments();
   $('#fPerson').closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -601,6 +607,8 @@ document.addEventListener('click', e => {
     render();
   } else if (t.dataset.chart) {
     chartMode = t.dataset.chart; renderChart();
+  } else if (t.closest('[data-daybar]')) {
+    openDayExpenses(t.closest('[data-daybar]').dataset.daybar);
   } else if (t.closest('[data-catbar]')) {
     openCatExpenses(t.closest('[data-catbar]').dataset.catbar);
   } else if (t.closest('[data-bar]')) {
@@ -691,7 +699,7 @@ $('#expForm').addEventListener('submit', e => {
 $('#fPerson').addEventListener('change', e => { filt.person = e.target.value; renderExpenses(); renderPayments(); });
 $('#fKind').addEventListener('change', e => { filt.kind = e.target.value; renderExpenses(); });
 document.addEventListener('keydown', e => {
-  const bar = e.target.closest && e.target.closest('[data-bar],[data-catbar]');
+  const bar = e.target.closest && e.target.closest('[data-bar],[data-catbar],[data-daybar]');
   if (bar && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); bar.querySelector('.nm').click(); }
 });
 // category select: options + suggestion from the description until the user picks one
@@ -701,6 +709,7 @@ $('#fCat').innerHTML = '<option value="">Todas las categorías</option>' + catOp
 $('#desc').addEventListener('input', () => { if (!catTouched) $('#cat').value = guessCat($('#desc').value); });
 $('#cat').addEventListener('change', () => { catTouched = true; });
 $('#fCat').addEventListener('change', e => { filt.cat = e.target.value; renderExpenses(); });
+$('#fDay').addEventListener('change', e => { filt.day = e.target.value; renderExpenses(); });
 $('#statsWho').addEventListener('change', e => { statsWho = e.target.value; renderStats(); });
 $('#fWith').addEventListener('change', e => { filt.with = e.target.value; renderExpenses(); renderPayments(); });
 
